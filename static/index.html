@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Analysis – Workflow Data</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="app-bar">
+      <div class="app-bar-brand">Stock Analysis</div>
+      <div class="app-bar-actions">
+        <div class="input-group">
+          <label for="symbol">Symbol</label>
+          <input type="text" id="symbol" value="RELIANCE" placeholder="e.g. RELIANCE">
+        </div>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-tab="analysis" role="tab" aria-selected="true">Analysis</button>
+      <button type="button" class="tab" data-tab="backtest" role="tab" aria-selected="false">Backtest</button>
+    </nav>
+
+    <main class="content">
+      <!-- Analysis tab panel -->
+      <section id="panel-analysis" class="tab-panel active" role="tabpanel">
+        <div class="panel-toolbar">
+          <div class="form-inline">
+            <div class="input-group">
+              <label for="analysis-lookback-value">Lookback</label>
+              <div class="lookback-inputs">
+                <input type="number" id="analysis-lookback-value" value="90" min="1">
+                <select id="analysis-lookback-unit" aria-label="Lookback unit">
+                  <option value="days">Days</option>
+                  <option value="months">Months</option>
+                  <option value="years">Years</option>
+                </select>
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-run-analysis">Run analysis</button>
+          </div>
+        </div>
+        <div id="analysis-loading" class="loading" hidden>Loading…</div>
+
+        <div id="analysis-body" class="analysis-body" hidden>
+          <div class="charts-block">
+            <div class="block-title">Charts</div>
+            <div id="chart-price" class="chart-pane"></div>
+            <div id="chart-volume" class="chart-pane chart-pane-sm"></div>
+            <div id="chart-rsi" class="chart-pane chart-pane-sm"></div>
+            <div id="chart-macd" class="chart-pane chart-pane-sm"></div>
+          </div>
+
+          <div class="data-panel">
+            <div id="analysis-data-range-msg" class="data-range-msg" hidden></div>
+            <div class="data-tabs">
+              <button type="button" class="data-tab active" data-data-tab="indicators">Indicators</button>
+              <button type="button" class="data-tab" data-data-tab="summaries">Summaries</button>
+              <button type="button" class="data-tab" data-data-tab="signal">Signal & Sentiment</button>
+            </div>
+            <div class="data-tab-content active" id="data-indicators">
+              <div class="table-container">
+                <table class="data-table" id="table-indicators">
+                  <thead><tr><th>Indicator</th><th class="num">Value</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="data-tab-content" id="data-summaries">
+              <div class="summary-card">
+                <h4>Volume</h4>
+                <p id="text-volume-summary"></p>
+              </div>
+              <div class="summary-card">
+                <h4>Structure</h4>
+                <p id="text-structure-summary"></p>
+              </div>
+            </div>
+            <div class="data-tab-content" id="data-signal">
+              <div class="signal-card" id="card-signal">
+                <h4>Signal</h4>
+                <p id="signal-action" class="signal-action"></p>
+                <p id="signal-reason" class="signal-reason"></p>
+              </div>
+              <div class="summary-card">
+                <h4>Sentiment</h4>
+                <p id="sentiment-score" class="sentiment-score"></p>
+                <p id="sentiment-label" class="sentiment-label"></p>
+                <ul id="sentiment-snippets" class="snippet-list"></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Backtest tab panel -->
+      <section id="panel-backtest" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-toolbar">
+          <div class="form-inline form-backtest">
+            <div class="input-group"><label for="backtest-start">Start</label><input type="date" id="backtest-start" value="2023-01-01"></div>
+            <div class="input-group"><label for="backtest-end">End</label><input type="date" id="backtest-end" value="2024-06-01"></div>
+            <div class="input-group"><label for="backtest-lookback">Lookback</label><input type="number" id="backtest-lookback" value="90" min="1"></div>
+            <div class="input-group"><label for="backtest-hold">Hold days</label><input type="number" id="backtest-hold" value="5" min="1"></div>
+            <div class="input-group"><label for="backtest-step">Step days</label><input type="number" id="backtest-step" value="5" min="1"></div>
+            <button type="button" class="btn btn-primary" id="btn-run-backtest">Run backtest</button>
+          </div>
+        </div>
+        <div id="backtest-loading" class="loading" hidden>Running backtest…</div>
+
+        <div id="backtest-results" class="backtest-body" hidden>
+          <div class="strategy-banner" id="backtest-strategy-banner">
+            <span class="strategy-label">Strategy:</span>
+            <span class="strategy-name" id="backtest-strategy-name">—</span>
+            <p class="strategy-desc" id="backtest-strategy-desc"></p>
+          </div>
+          <div class="charts-block">
+            <div class="block-title">Equity curve</div>
+            <div id="chart-equity" class="chart-pane chart-equity"></div>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric-tile"><span class="metric-label">Trades</span><span class="metric-value" id="metric-trade-count">—</span></div>
+            <div class="metric-tile"><span class="metric-label">Win rate</span><span class="metric-value" id="metric-win-rate">—</span></div>
+            <div class="metric-tile"><span class="metric-label">Avg return</span><span class="metric-value" id="metric-avg-return">—</span></div>
+            <div class="metric-tile"><span class="metric-label">Sharpe</span><span class="metric-value" id="metric-sharpe">—</span></div>
+            <div class="metric-tile"><span class="metric-label">Max drawdown</span><span class="metric-value" id="metric-max-dd">—</span></div>
+          </div>
+          <div class="table-block">
+            <div class="block-title">By signal</div>
+            <div class="table-container">
+              <table class="data-table" id="table-by-signal">
+                <thead><tr><th>Signal</th><th class="num">Count</th><th class="num">Win rate</th><th class="num">Avg return</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

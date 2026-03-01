@@ -1,8 +1,16 @@
 """Backtest metrics from (date, signal, forward_return) rows."""
 
+import math
 from typing import Literal
 
 import numpy as np
+
+
+def _finite_float(x: float) -> float:
+    """Return x if finite, else 0.0 (for JSON-safe metrics)."""
+    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+        return 0.0
+    return float(x)
 
 
 def win_rate(returns: list[float]) -> float:
@@ -53,19 +61,24 @@ def compute_metrics(
         sig = r.get(signal_key) or r.get(action_key)
         ret = r.get(return_key)
         if sig in by_action and ret is not None:
-            by_action[sig].append(float(ret))
+            try:
+                v = float(ret)
+                if math.isfinite(v):
+                    by_action[sig].append(v)
+            except (TypeError, ValueError):
+                pass
 
     result = {
         "by_signal": {
             "BUY": {
                 "count": len(by_action["BUY"]),
-                "win_rate": win_rate(by_action["BUY"]),
-                "avg_return": average_return(by_action["BUY"]),
+                "win_rate": _finite_float(win_rate(by_action["BUY"])),
+                "avg_return": _finite_float(average_return(by_action["BUY"])),
             },
             "SELL": {
                 "count": len(by_action["SELL"]),
-                "win_rate": win_rate(by_action["SELL"]),
-                "avg_return": average_return(by_action["SELL"]),
+                "win_rate": _finite_float(win_rate(by_action["SELL"])),
+                "avg_return": _finite_float(average_return(by_action["SELL"])),
             },
             "HOLD": {"count": len(by_action["HOLD"])},
         },
@@ -79,12 +92,12 @@ def compute_metrics(
     if all_returns:
         result["portfolio"] = {
             "trade_count": len(all_returns),
-            "win_rate": win_rate(all_returns),
-            "avg_return": average_return(all_returns),
-            "sharpe": sharpe_ratio(all_returns),
+            "win_rate": _finite_float(win_rate(all_returns)),
+            "avg_return": _finite_float(average_return(all_returns)),
+            "sharpe": _finite_float(sharpe_ratio(all_returns)),
         }
         cum = np.cumprod([1 + r for r in all_returns])
-        result["portfolio"]["max_drawdown"] = max_drawdown(cum.tolist())
+        result["portfolio"]["max_drawdown"] = _finite_float(max_drawdown(cum.tolist()))
     else:
         result["portfolio"] = {"trade_count": 0, "win_rate": 0, "avg_return": 0, "sharpe": 0, "max_drawdown": 0}
     return result

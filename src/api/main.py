@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.config_loader import load_config
 from src.data.cache import init_cache_db
@@ -49,6 +51,19 @@ app.include_router(sentiment.router, prefix="", tags=["sentiment"])
 app.include_router(trend.router, prefix="", tags=["trend"])
 app.include_router(risk.router, prefix="", tags=["risk"])
 app.include_router(backtest.router, prefix="", tags=["backtest"])
+
+# Web app: static files and /app route
+_STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/app", include_in_schema=False)
+    def app_index():
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    @app.get("/app/", include_in_schema=False)
+    def app_index_slash():
+        return FileResponse(_STATIC_DIR / "index.html")
 
 
 @app.get("/health")

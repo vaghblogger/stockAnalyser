@@ -121,7 +121,7 @@ class AppConfig(BaseModel):
     symbols_path: str = "config/symbols.csv"
     cache_dir: str = "data/cache"
     cache_ttl_days: int = 1
-    max_lookback_days: int = 365
+    max_lookback_days: int = 3650
     max_backtest_dates: int = 1000
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)

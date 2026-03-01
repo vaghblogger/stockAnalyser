@@ -1,5 +1,6 @@
 """POST /backtest - run backtest; GET /metrics not needed if backtest returns metrics."""
 
+import math
 from datetime import date, timedelta
 from typing import Any, Optional
 
@@ -142,4 +143,19 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
         get_forward_return=get_forward_return,
         max_dates=max_dates,
     )
-    return result
+    result["strategy"] = {
+        "name": "Rule-based (RSI + MACD + SMA200)",
+        "description": "BUY: RSI < 30 and MACD bullish; or MACD bullish and above SMA200. SELL: RSI > 70; or MACD bearish and below SMA200. Otherwise HOLD.",
+    }
+
+    def _sanitize_json(obj: Any) -> Any:
+        """Replace nan/inf floats with None so JSON serialization does not fail."""
+        if isinstance(obj, dict):
+            return {k: _sanitize_json(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize_json(v) for v in obj]
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        return obj
+
+    return _sanitize_json(result)
