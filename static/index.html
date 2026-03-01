@@ -15,16 +15,16 @@
     <header class="app-bar">
       <div class="app-bar-brand">Stock Analysis</div>
       <div class="app-bar-actions">
-        <div class="input-group">
-          <label for="symbol">Symbol</label>
-          <input type="text" id="symbol" value="RELIANCE" placeholder="e.g. RELIANCE">
-        </div>
+        <button type="button" class="btn btn-secondary" id="btn-add-stock" title="Add a new stock to universe (fetches 10 years data)">Add stock</button>
       </div>
     </header>
 
     <nav class="tabs" role="tablist">
       <button type="button" class="tab active" data-tab="analysis" role="tab" aria-selected="true">Analysis</button>
+      <button type="button" class="tab" data-tab="dashboard" role="tab" aria-selected="false">Dashboard</button>
       <button type="button" class="tab" data-tab="backtest" role="tab" aria-selected="false">Backtest</button>
+      <button type="button" class="tab" data-tab="paper" role="tab" aria-selected="false">Paper Trading</button>
+      <button type="button" class="tab" data-tab="strategies" role="tab" aria-selected="false">Strategies</button>
     </nav>
 
     <main class="content">
@@ -32,6 +32,14 @@
       <section id="panel-analysis" class="tab-panel active" role="tabpanel">
         <div class="panel-toolbar">
           <div class="form-inline">
+            <div class="input-group analysis-symbol-wrap">
+              <label for="analysis-symbol-input">Symbol</label>
+              <div class="combobox-wrap">
+                <input type="text" id="analysis-symbol-input" value="RELIANCE" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="analysis-symbol-listbox" role="combobox">
+                <button type="button" class="combobox-trigger" id="analysis-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+                <ul id="analysis-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+              </div>
+            </div>
             <div class="input-group">
               <label for="analysis-lookback-value">Lookback</label>
               <div class="lookback-inputs">
@@ -49,6 +57,12 @@
         <div id="analysis-loading" class="loading" hidden>Loading…</div>
 
         <div id="analysis-body" class="analysis-body" hidden>
+          <div id="signal-banner" class="signal-banner" aria-live="polite">
+            <span id="signal-banner-action" class="signal-banner-action">—</span>
+            <p id="signal-banner-reason" class="signal-banner-reason"></p>
+          </div>
+          <div id="indicator-gauges" class="indicator-gauges" aria-label="Indicator gauges"></div>
+          <div class="analysis-body-grid">
           <div class="charts-block">
             <div class="block-title">Charts</div>
             <div id="chart-price" class="chart-pane"></div>
@@ -65,11 +79,24 @@
               <button type="button" class="data-tab" data-data-tab="signal">Signal & Sentiment</button>
             </div>
             <div class="data-tab-content active" id="data-indicators">
-              <div class="table-container">
-                <table class="data-table" id="table-indicators">
-                  <thead><tr><th>Indicator</th><th class="num">Value</th></tr></thead>
-                  <tbody></tbody>
-                </table>
+              <p id="indicator-summary" class="indicator-summary" aria-live="polite">—</p>
+              <div class="indicator-sections">
+                <section class="indicator-section">
+                  <h4 class="indicator-section-title">Trend</h4>
+                  <div id="indicator-trend" class="indicator-list"></div>
+                </section>
+                <section class="indicator-section">
+                  <h4 class="indicator-section-title">Momentum</h4>
+                  <div id="indicator-momentum" class="indicator-list"></div>
+                </section>
+                <section class="indicator-section">
+                  <h4 class="indicator-section-title">Volatility</h4>
+                  <div id="indicator-volatility" class="indicator-list"></div>
+                </section>
+                <section class="indicator-section">
+                  <h4 class="indicator-section-title">Volume</h4>
+                  <div id="indicator-volume" class="indicator-list"></div>
+                </section>
               </div>
             </div>
             <div class="data-tab-content" id="data-summaries">
@@ -83,18 +110,58 @@
               </div>
             </div>
             <div class="data-tab-content" id="data-signal">
-              <div class="signal-card" id="card-signal">
-                <h4>Signal</h4>
+              <div class="signal-detail-card">
+                <h4>Signal (from indicators)</h4>
                 <p id="signal-action" class="signal-action"></p>
                 <p id="signal-reason" class="signal-reason"></p>
               </div>
-              <div class="summary-card">
-                <h4>Sentiment</h4>
-                <p id="sentiment-score" class="sentiment-score"></p>
-                <p id="sentiment-label" class="sentiment-label"></p>
-                <ul id="sentiment-snippets" class="snippet-list"></ul>
+              <div class="sentiment-card">
+                <h4>News sentiment</h4>
+                <p id="sentiment-source" class="sentiment-source" aria-label="Data source"></p>
+                <div class="sentiment-score-row">
+                  <span id="sentiment-score" class="sentiment-score-value"></span>
+                  <span id="sentiment-label" class="sentiment-label-badge"></span>
+                </div>
+                <p class="sentiment-snippets-heading">Recent headlines</p>
+                <ul id="sentiment-snippets" class="sentiment-snippets-list"></ul>
               </div>
             </div>
+          </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dashboard: all stocks in DB with indicators and signal -->
+      <section id="panel-dashboard" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-toolbar">
+          <div class="form-inline">
+            <div class="input-group">
+              <label for="dashboard-lookback">Lookback (days)</label>
+              <input type="number" id="dashboard-lookback" value="90" min="20" max="365">
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-dashboard-refresh">Refresh</button>
+            <button type="button" class="btn btn-secondary" id="btn-dashboard-columns" title="Column settings">Columns</button>
+          </div>
+        </div>
+        <div id="dashboard-loading" class="loading" hidden>Loading…</div>
+        <div id="dashboard-body" class="dashboard-body" hidden>
+          <p id="dashboard-summary" class="dashboard-summary"></p>
+          <div class="table-container dashboard-table-wrap">
+            <table class="data-table" id="table-dashboard">
+              <thead id="dashboard-thead">
+                <tr>
+                  <th>Stock</th>
+                  <th class="num">Close</th>
+                  <th class="num">SMA 20</th>
+                  <th class="num">SMA 50</th>
+                  <th class="num">RSI</th>
+                  <th class="num">MACD Hist</th>
+                  <th>Signal</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="dashboard-tbody"></tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -103,12 +170,15 @@
       <section id="panel-backtest" class="tab-panel" role="tabpanel" hidden>
         <div class="panel-toolbar">
           <div class="form-inline form-backtest">
+            <div class="input-group"><label for="backtest-symbols">Symbols</label><input type="text" id="backtest-symbols" value="RELIANCE" placeholder="RELIANCE or RELIANCE, TCS, INFY"></div>
+            <div class="input-group"><label for="backtest-strategy">Strategy</label><select id="backtest-strategy" aria-label="Strategy"><option value="">Global default</option></select></div>
             <div class="input-group"><label for="backtest-start">Start</label><input type="date" id="backtest-start" value="2023-01-01"></div>
             <div class="input-group"><label for="backtest-end">End</label><input type="date" id="backtest-end" value="2024-06-01"></div>
             <div class="input-group"><label for="backtest-lookback">Lookback</label><input type="number" id="backtest-lookback" value="90" min="1"></div>
             <div class="input-group"><label for="backtest-hold">Hold days</label><input type="number" id="backtest-hold" value="5" min="1"></div>
             <div class="input-group"><label for="backtest-step">Step days</label><input type="number" id="backtest-step" value="5" min="1"></div>
             <button type="button" class="btn btn-primary" id="btn-run-backtest">Run backtest</button>
+            <button type="button" class="btn btn-secondary" id="btn-save-strategy" title="Save current settings as a new strategy">Save as strategy</button>
           </div>
         </div>
         <div id="backtest-loading" class="loading" hidden>Running backtest…</div>
@@ -141,7 +211,111 @@
           </div>
         </div>
       </section>
+
+      <!-- Paper Trading tab -->
+      <section id="panel-paper" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-toolbar">
+          <button type="button" class="btn btn-primary" id="btn-paper-new-portfolio">New portfolio</button>
+        </div>
+        <div id="paper-body" class="paper-body">
+          <div id="paper-list-wrap">
+            <h3>Portfolios</h3>
+            <ul id="paper-portfolios-list" class="paper-list"></ul>
+          </div>
+          <div id="paper-detail-wrap" hidden>
+            <h3 id="paper-detail-title"></h3>
+            <p id="paper-detail-meta"></p>
+            <div class="form-inline">
+              <input type="text" id="paper-add-symbol" placeholder="Symbol e.g. RELIANCE">
+              <button type="button" class="btn btn-secondary" id="btn-paper-add-position">Add stock</button>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="paper-positions-table">
+                <thead><tr><th>Symbol</th><th>Strategies</th><th></th></tr></thead>
+                <tbody id="paper-positions-tbody"></tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-paper-run">Run simulation</button>
+            <div id="paper-snapshots" class="paper-snapshots"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Strategies: list, add, remove, set default -->
+      <section id="panel-strategies" class="tab-panel" role="tabpanel" hidden>
+        <div class="panel-toolbar">
+          <button type="button" class="btn btn-primary" id="btn-strategies-add">Add strategy</button>
+        </div>
+        <div id="strategies-loading" class="loading" hidden>Loading…</div>
+        <div id="strategies-body" class="strategies-body">
+          <p id="strategies-summary" class="strategies-summary"></p>
+          <div id="strategies-list" class="strategies-list"></div>
+        </div>
+      </section>
     </main>
+
+    <!-- Modals at app root so visibility is independent of tab panel display -->
+    <div id="dashboard-columns-modal" class="modal" role="dialog" aria-label="Dashboard column settings" hidden>
+      <div class="modal-content">
+        <h3>Dashboard columns</h3>
+        <p class="modal-hint">Select and reorder columns. Changes are saved automatically.</p>
+        <div id="dashboard-columns-list" class="columns-list"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-dashboard-columns-save">Save</button>
+          <button type="button" class="btn btn-secondary" id="btn-dashboard-columns-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="save-strategy-modal" class="modal" role="dialog" aria-label="Save strategy" hidden>
+      <div class="modal-content">
+        <h3>Save as strategy</h3>
+        <div class="input-group"><label for="save-strategy-name">Name</label><input type="text" id="save-strategy-name" placeholder="e.g. RSI MACD Conservative"></div>
+        <div class="input-group"><label for="save-strategy-desc">Description</label><input type="text" id="save-strategy-desc" placeholder="Optional"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-save-strategy-submit">Save</button>
+          <button type="button" class="btn btn-secondary" id="btn-save-strategy-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="add-stock-modal" class="modal" role="dialog" aria-label="Add stock" hidden>
+      <div class="modal-content">
+        <h3>Add stock</h3>
+        <p class="modal-hint">Add a stock not in Nifty 50. Fetches last 10 years of data so it appears everywhere (Analysis, Dashboard, Backtest, Paper).</p>
+        <div class="input-group"><label for="add-stock-symbol">Symbol</label><input type="text" id="add-stock-symbol" placeholder="e.g. TCS, INFY" required></div>
+        <div class="input-group"><label for="add-stock-company">Company name (optional)</label><input type="text" id="add-stock-company" placeholder="Optional"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-add-stock-submit">Add and fetch data</button>
+          <button type="button" class="btn btn-secondary" id="btn-add-stock-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="edit-stock-modal" class="modal" role="dialog" aria-label="Edit stock" hidden data-current-symbol="">
+      <div class="modal-content">
+        <h3>Edit stock</h3>
+        <p class="modal-hint">Change display symbol, Yahoo symbol, or company name. If you change the symbol or Yahoo symbol, price data will be refetched for the new symbol.</p>
+        <div class="input-group"><label for="edit-stock-symbol">Symbol</label><input type="text" id="edit-stock-symbol" placeholder="e.g. RELIANCE" required></div>
+        <div class="input-group"><label for="edit-stock-yahoo">Yahoo symbol (optional)</label><input type="text" id="edit-stock-yahoo" placeholder="e.g. RELIANCE.NS or RELIANCE.BO"></div>
+        <div class="input-group"><label for="edit-stock-company">Company name (optional)</label><input type="text" id="edit-stock-company" placeholder="Optional"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-edit-stock-save">Save</button>
+          <button type="button" class="btn btn-secondary" id="btn-edit-stock-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="add-strategy-modal" class="modal" role="dialog" aria-label="Add strategy" hidden>
+      <div class="modal-content">
+        <h3>Add strategy</h3>
+        <div class="input-group"><label for="add-strategy-name">Name</label><input type="text" id="add-strategy-name" placeholder="e.g. RSI 30/70" required></div>
+        <div class="input-group"><label for="add-strategy-desc">Description</label><input type="text" id="add-strategy-desc" placeholder="Optional"></div>
+        <div class="input-group"><label for="add-strategy-type">Type</label><select id="add-strategy-type"><option value="rule_based">Rule-based</option></select></div>
+        <div class="input-group"><label for="add-strategy-params">Params (JSON)</label><textarea id="add-strategy-params" rows="4" placeholder='{"rsi_buy_below": 30, "rsi_sell_above": 70}'></textarea></div>
+        <label class="checkbox-label"><input type="checkbox" id="add-strategy-default" aria-label="Set as global default"> Set as global default</label>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-add-strategy-submit">Add</button>
+          <button type="button" class="btn btn-secondary" id="btn-add-strategy-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

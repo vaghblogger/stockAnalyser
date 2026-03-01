@@ -118,44 +118,51 @@ def compute_indicators(
 
     last: dict[str, float] = {}
 
+    def _last_finite(series: pd.Series):
+        """Last valid (non-nan) value, or nan if none."""
+        if series.empty:
+            return float("nan")
+        dropped = series.dropna()
+        return float(dropped.iloc[-1]) if len(dropped) > 0 else float("nan")
+
     for p in sma_periods:
         df[f"sma_{p}"] = compute_sma(df, p)
         if not df.empty:
-            last[f"sma_{p}"] = float(df[f"sma_{p}"].iloc[-1])
+            last[f"sma_{p}"] = _last_finite(df[f"sma_{p}"])
     for p in ema_periods:
         df[f"ema_{p}"] = compute_ema(df, p)
         if not df.empty:
-            last[f"ema_{p}"] = float(df[f"ema_{p}"].iloc[-1])
+            last[f"ema_{p}"] = _last_finite(df[f"ema_{p}"])
 
     df["rsi"] = compute_rsi(df, rsi_period)
     if not df.empty:
-        last["rsi"] = float(df["rsi"].iloc[-1])
+        last["rsi"] = _last_finite(df["rsi"])
 
     macd_line, signal_line, hist = compute_macd(df, macd_fast, macd_slow, macd_signal)
     df["macd"] = macd_line
     df["macd_signal"] = signal_line
     df["macd_hist"] = hist
     if not df.empty:
-        last["macd"] = float(df["macd"].iloc[-1])
-        last["macd_signal"] = float(df["macd_signal"].iloc[-1])
-        last["macd_hist"] = float(df["macd_hist"].iloc[-1])
+        last["macd"] = _last_finite(df["macd"])
+        last["macd_signal"] = _last_finite(df["macd_signal"])
+        last["macd_hist"] = _last_finite(df["macd_hist"])
 
     df["atr"] = compute_atr(df, atr_period)
     if not df.empty:
-        last["atr"] = float(df["atr"].iloc[-1])
+        last["atr"] = _last_finite(df["atr"])
 
     bb_upper, bb_mid, bb_lower = compute_bollinger(df, bb_period, bb_std)
     df["bb_upper"] = bb_upper
     df["bb_mid"] = bb_mid
     df["bb_lower"] = bb_lower
     if not df.empty:
-        last["bb_upper"] = float(df["bb_upper"].iloc[-1])
-        last["bb_lower"] = float(df["bb_lower"].iloc[-1])
+        last["bb_upper"] = _last_finite(df["bb_upper"])
+        last["bb_lower"] = _last_finite(df["bb_lower"])
 
     if "Volume" in df.columns:
         obv = (np.sign(df["Close"].diff()) * df["Volume"]).fillna(0).cumsum()
         df["obv"] = obv
         if not df.empty:
-            last["obv"] = float(df["obv"].iloc[-1])
+            last["obv"] = _last_finite(df["obv"])
 
     return df, last

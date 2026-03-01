@@ -6,7 +6,7 @@ symbol_suffix: ".NS"
 symbols_path: "config/symbols.csv"
 cache_dir: "data/cache"
 cache_ttl_days: 1
-max_lookback_days: 3650
+max_lookback_days: 10000
 max_backtest_dates: 1000
 
 providers:
@@ -67,6 +67,11 @@ backtest:
   default_lookback_days: 90
   default_hold_days: 5
   default_step_days: 5
+
+refresh:
+  refresh_enabled: true
+  refresh_interval_minutes: 360
+  refresh_lookback_days: 5
 
 api:
   port: 8000

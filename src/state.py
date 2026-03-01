@@ -107,6 +107,12 @@ class APIConfig(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class RefreshConfig(BaseModel):
+    refresh_enabled: bool = True
+    refresh_interval_minutes: int = 360
+    refresh_lookback_days: int = 5
+
+
 class ProvidersConfig(BaseModel):
     data_provider: str = "yfinance"
     sentiment_provider: str = "free_news_finbert"
@@ -129,3 +135,4 @@ class AppConfig(BaseModel):
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     api: APIConfig = Field(default_factory=APIConfig)
+    refresh: RefreshConfig = Field(default_factory=RefreshConfig)

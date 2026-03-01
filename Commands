@@ -1,4 +1,20 @@
-# Start API (keep running)
+# ========== STEPS TO START APP AND BACKEND ==========
+# 1. From project root, activate venv (optional; you can call .venv/bin/python directly):
+#    source .venv/bin/activate   # macOS/Linux
+#
+# 2. Start the backend (API + web app). Keep this terminal open.
+#    IMPORTANT: use a space between "uvicorn" and "src" (not uvicornsrc)
+#    cd /Users/vagh/Cursor/StockAnalysis && .venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+#
+# 3. Open the web app in a browser:
+#    http://127.0.0.1:8000/app
+#
+# 4. (Optional) Start n8n for workflow orchestration — in a second terminal:
+#    N8N_SECURE_COOKIE=false npx n8n
+#    Then open http://127.0.0.1:5678 and import workflows from n8n/workflows/
+# ====================================================
+
+# Start API (keep running) — note space: "uvicorn" then "src.api.main:app"
 .venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 # Start n8n (free plan: no Variables)

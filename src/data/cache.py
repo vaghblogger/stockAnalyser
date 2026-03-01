@@ -69,6 +69,74 @@ def read_ohlcv_cache(
         return None
 
 
+def read_ohlcv_cache_partial(
+    cache_dir: str,
+    symbol: str,
+    start: date,
+    end: date,
+    min_rows: int = 20,
+) -> Optional[pd.DataFrame]:
+    """
+    Return cached DataFrame for symbol in [start, end] if we have at least min_rows.
+    Does not require full date coverage (use for dashboard when partial data is OK).
+    """
+    import sqlite3
+    db = _db_path(cache_dir)
+    if not db.exists():
+        return None
+    start_str = start.isoformat()
+    end_str = end.isoformat()
+    try:
+        conn = sqlite3.connect(str(db))
+        _ensure_table(conn)
+        df = pd.read_sql_query(
+            "SELECT date, open, high, low, close, volume FROM ohlcv WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date",
+            conn,
+            params=(symbol, start_str, end_str),
+        )
+        conn.close()
+        if df.empty or len(df) < min_rows:
+            return None
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        return df.sort_index()
+    except Exception:
+        return None
+
+
+def read_ohlcv_cache_last_n(
+    cache_dir: str,
+    symbol: str,
+    n: int = 250,
+) -> Optional[pd.DataFrame]:
+    """
+    Return the last n cached rows for symbol (most recent dates). Use when date range has no data.
+    """
+    import sqlite3
+    db = _db_path(cache_dir)
+    if not db.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(db))
+        _ensure_table(conn)
+        df = pd.read_sql_query(
+            "SELECT date, open, high, low, close, volume FROM ohlcv WHERE symbol = ? ORDER BY date DESC LIMIT ?",
+            conn,
+            params=(symbol, n),
+        )
+        conn.close()
+        if df.empty or len(df) < 20:
+            return None
+        df = df.iloc[::-1].reset_index(drop=True)  # oldest first
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df.columns = ["Open", "High", "Low", "Close", "Volume"]
+        return df.sort_index()
+    except Exception:
+        return None
+
+
 def write_ohlcv_cache(
     cache_dir: str,
     symbol: str,
@@ -107,6 +175,23 @@ def init_cache_db(cache_dir: str) -> None:
     conn.close()
 
 
+def list_symbols_in_cache(cache_dir: str) -> list[str]:
+    """Return distinct symbols in the OHLCV cache, sorted. Updates as new data is written."""
+    import sqlite3
+    db = _db_path(cache_dir)
+    if not db.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db))
+        _ensure_table(conn)
+        cur = conn.execute("SELECT DISTINCT symbol FROM ohlcv ORDER BY symbol")
+        symbols = [row[0] for row in cur.fetchall()]
+        conn.close()
+        return symbols
+    except Exception:
+        return []
+
+
 def get_cached_or_fetch(
     cache_dir: str,
     symbol: str,
@@ -123,6 +208,6 @@ def get_cached_or_fetch(
         if cached is not None and not cached.empty:
             return cached
     df = fetcher(symbol, start, end)
-    if use_cache and not df.empty:
+    if not df.empty:
         write_ohlcv_cache(cache_dir, symbol, df)
     return df

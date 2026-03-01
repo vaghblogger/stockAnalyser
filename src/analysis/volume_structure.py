@@ -10,10 +10,12 @@ def volume_summary(df: pd.DataFrame, window: int = 20) -> str:
     vol = df["Volume"]
     avg_vol = vol.rolling(window, min_periods=1).mean().iloc[-1] if len(vol) >= 1 else vol.iloc[-1]
     last_vol = vol.iloc[-1]
-    if avg_vol and avg_vol > 0:
-        pct = (last_vol / avg_vol - 1) * 100
-        return f"Latest volume {last_vol:,.0f} vs {window}d avg {avg_vol:,.0f} ({pct:+.1f}%)."
-    return f"Latest volume {last_vol:,.0f}."
+    if pd.isna(last_vol):
+        last_vol = 0
+    if pd.isna(avg_vol) or not (avg_vol and avg_vol > 0):
+        return f"Latest volume {last_vol:,.0f}."
+    pct = (last_vol / avg_vol - 1) * 100
+    return f"Latest volume {last_vol:,.0f} vs {window}d avg {avg_vol:,.0f} ({pct:+.1f}%)."
 
 
 def structure_summary(df: pd.DataFrame, short: int = 5, long: int = 20) -> str:

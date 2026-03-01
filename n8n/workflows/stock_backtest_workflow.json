@@ -15,7 +15,7 @@
         "url": "http://127.0.0.1:8000/backtest",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"symbol\": \"{{ $json.symbol || 'RELIANCE' }}\",\n  \"start\": \"{{ $json.start || '2023-01-01' }}\",\n  \"end\": \"{{ $json.end || '2024-06-01' }}\",\n  \"lookback_days\": {{ $json.lookback_days || 90 }},\n  \"hold_days\": {{ $json.hold_days || 5 }},\n  \"step_days\": {{ $json.step_days || 5 }}\n}",
+        "jsonBody": "={\n  \"symbol\": \"{{ $json.symbol || 'RELIANCE' }}\",\n  \"start\": \"{{ $json.start || '2023-01-01' }}\",\n  \"end\": \"{{ $json.end || '2024-06-01' }}\",\n  \"lookback_days\": {{ $json.lookback_days || 90 }},\n  \"hold_days\": {{ $json.hold_days || 5 }},\n  \"step_days\": {{ $json.step_days || 5 }},\n  \"strategy_id\": \"{{ $json.strategy_id || '' }}\"\n}",
         "options": {}
       },
       "id": "http-backtest",
@@ -29,7 +29,9 @@
         "assignments": {
           "assignments": [
             { "id": "metrics", "name": "metrics", "value": "={{ $json.metrics }}", "type": "object" },
-            { "id": "rows_count", "name": "rows_count", "value": "={{ $json.rows.length }}", "type": "number" }
+            { "id": "rows_count", "name": "rows_count", "value": "={{ $json.rows ? $json.rows.length : 0 }}", "type": "number" },
+            { "id": "strategy", "name": "strategy", "value": "={{ $json.strategy }}", "type": "object" },
+            { "id": "by_symbol", "name": "by_symbol", "value": "={{ $json.by_symbol }}", "type": "object" }
           ]
         },
         "options": {}
