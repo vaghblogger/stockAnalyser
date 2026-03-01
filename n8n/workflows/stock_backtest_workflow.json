@@ -1,0 +1,52 @@
+{
+  "name": "Stock Backtest - Trigger and Report",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE || 'http://localhost:8000' }}/backtest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"symbol\": \"{{ $json.symbol || 'RELIANCE' }}\",\n  \"start\": \"{{ $json.start || '2023-01-01' }}\",\n  \"end\": \"{{ $json.end || '2024-06-01' }}\",\n  \"lookback_days\": {{ $json.lookback_days || 90 }},\n  \"hold_days\": {{ $json.hold_days || 5 }},\n  \"step_days\": {{ $json.step_days || 5 }}\n}",
+        "options": {}
+      },
+      "id": "http-backtest",
+      "name": "POST Backtest",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "metrics", "name": "metrics", "value": "={{ $json.metrics }}", "type": "object" },
+            { "id": "rows_count", "name": "rows_count", "value": "={{ $json.rows.length }}", "type": "number" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-report",
+      "name": "Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": { "main": [[{ "node": "POST Backtest", "type": "main", "index": 0 }]] },
+    "POST Backtest": { "main": [[{ "node": "Report", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": true }
+}

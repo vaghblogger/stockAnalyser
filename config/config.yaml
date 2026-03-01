@@ -1,0 +1,75 @@
+# Stock Analysis Agent - Central config
+# Env vars override these values (e.g. DATA_PROVIDER, CACHE_DIR)
+
+default_exchange: NSE
+symbol_suffix: ".NS"
+symbols_path: "config/symbols.csv"
+cache_dir: "data/cache"
+cache_ttl_days: 1
+max_lookback_days: 365
+max_backtest_dates: 1000
+
+providers:
+  data_provider: yfinance
+  sentiment_provider: free_news_finbert
+  yfinance:
+    cache_ttl_days: 1
+    auto_adjust: true
+
+analysis:
+  indicators:
+    trend:
+      sma_periods: [20, 50, 200]
+      ema_periods: [12, 26]
+      adx_period: 14
+      ichimoku: true
+      parabolic_sar: true
+    momentum:
+      rsi_period: 14
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      stochastic_k: 14
+      stochastic_d: 3
+      cci_period: 20
+      roc_period: 10
+    volatility:
+      bollinger_period: 20
+      bollinger_std: 2
+      atr_period: 14
+      keltner_period: 20
+    volume:
+      obv: true
+      mfi_period: 14
+      chaikin_period: 20
+    support_resistance:
+      pivot: true
+      swing_days: 30
+  trend_thresholds:
+    sma_cross_bullish: true
+    sma_cross_bearish: true
+  risk:
+    atr_multiplier_stop: 2.0
+    volatility_regime_atr_pct: 3.0
+
+llm:
+  model: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 500
+
+decision:
+  mode: hybrid  # rule | ml | hybrid
+  rule_overlay:
+    rsi_no_buy_above: 80
+    rsi_no_sell_below: 20
+
+backtest:
+  default_lookback_days: 90
+  default_hold_days: 5
+  default_step_days: 5
+
+api:
+  port: 8000
+  workers: 1
+  request_timeout_seconds: 60
+  cors_origins: ["*"]
