@@ -12,7 +12,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.API_BASE || 'http://localhost:8000' }}/backtest",
+        "url": "http://127.0.0.1:8000/backtest",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"symbol\": \"{{ $json.symbol || 'RELIANCE' }}\",\n  \"start\": \"{{ $json.start || '2023-01-01' }}\",\n  \"end\": \"{{ $json.end || '2024-06-01' }}\",\n  \"lookback_days\": {{ $json.lookback_days || 90 }},\n  \"hold_days\": {{ $json.hold_days || 5 }},\n  \"step_days\": {{ $json.step_days || 5 }}\n}",

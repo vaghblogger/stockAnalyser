@@ -1,0 +1,18 @@
+# Start API (keep running)
+.venv/bin/uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+
+# Start n8n (free plan: no Variables)
+N8N_SECURE_COOKIE=false npx n8n
+
+# Cache DB init (if table missing)
+.venv/bin/python -c "from src.data.cache import init_cache_db; from src.config_loader import get_config; init_cache_db(get_config().cache_dir); print('Done')"
+
+# Query cache
+sqlite3 data/cache/ohlcv.db "SELECT symbol, date, close FROM ohlcv ORDER BY date DESC LIMIT 10"
+
+# n8n "connection refused" fix: workflows use http://127.0.0.1:8000 (not localhost). Re-import workflow JSON. If n8n runs in Docker, use http://host.docker.internal:8000 in each HTTP node.
+
+# --- Where to analyse data ---
+# In n8n: After running a workflow, open "Executions" (left) → click the run → click any node to see its OUTPUT (JSON). Best nodes: "Merge" (Enrich + Sentiment combined), "Set Output", "POST Backtest", "Report".
+# API (browser): http://127.0.0.1:8000/docs — try GET /ohlcv, POST /enrich, GET /sentiment, POST /backtest.
+# CLI: .venv/bin/python run.py analyze --symbol RELIANCE --days 90  and  .venv/bin/python run.py backtest --symbol RELIANCE --start 2023-01-01 --end 2024-06-01
