@@ -10,6 +10,7 @@ from src.data.universe import pre_seed_ohlcv
 from src.db.app_db import (
     add_universe_symbol,
     get_universe_symbol,
+    get_universe_symbol_by_any,
     list_universe_symbols,
     remove_universe_symbol,
     update_universe_symbol,
@@ -36,6 +37,17 @@ class UpdateSymbolRequest(BaseModel):
     lookback_days: Optional[int] = 3650  # when refetching after symbol change
 
 
+class UpdateSymbolBodyRequest(UpdateSymbolRequest):
+    """Update symbol with current_symbol in body (avoids path-param 404 issues)."""
+    current_symbol: str  # symbol being edited (path is always POST /universe/update)
+
+
+@router.post("/universe/update")
+def post_universe_update(request: Request, body: UpdateSymbolBodyRequest):
+    """Update a symbol by current_symbol in body. Defined before /universe/{symbol} so path is matched correctly."""
+    return put_universe_symbol(request, body.current_symbol.strip().upper(), body)
+
+
 @router.get("/universe/item/{symbol}")
 @router.get("/universe/{symbol}")
 def get_universe_symbol_route(request: Request, symbol: str):
@@ -44,7 +56,7 @@ def get_universe_symbol_route(request: Request, symbol: str):
     if config is None:
         from src.config_loader import get_config
         config = get_config()
-    s = get_universe_symbol(config.cache_dir, symbol)
+    s = get_universe_symbol_by_any(config.cache_dir, symbol)
     if not s:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Symbol not found")
@@ -201,68 +213,82 @@ def post_universe_symbol(request: Request, body: AddSymbolRequest):
 
 
 @router.put("/universe/{symbol}")
+@router.post("/universe/{symbol}/update")
 def put_universe_symbol(request: Request, symbol: str, body: UpdateSymbolRequest):
     """
     Update a symbol's name (company_name), yahoo_symbol, or rename (symbol).
     If symbol or yahoo_symbol is changed, refetches OHLCV data for the new symbol.
+    PUT /universe/{symbol} or POST /universe/{symbol}/update (for clients that block PUT).
     """
     from datetime import date, timedelta
 
-    config = getattr(request.app.state, "config", None)
-    if config is None:
-        from src.config_loader import get_config
-        config = get_config()
-    provider = getattr(request.app.state, "data_provider", None)
-    current_symbol = symbol.strip().upper()
-    existing = get_universe_symbol(config.cache_dir, current_symbol)
-    if not existing:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Symbol not found")
+    try:
+        config = getattr(request.app.state, "config", None)
+        if config is None:
+            from src.config_loader import get_config
+            config = get_config()
+        provider = getattr(request.app.state, "data_provider", None)
+        current_symbol = (symbol or "").strip().upper()
+        if not current_symbol:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Symbol is required")
+        existing = get_universe_symbol_by_any(config.cache_dir, current_symbol)
+        new_symbol = (body.symbol or "").strip().upper() if body.symbol else current_symbol
+        new_symbol = new_symbol or current_symbol
+        if body.yahoo_symbol is not None and str(body.yahoo_symbol).strip():
+            new_yahoo = _normalize_yahoo_symbol(body.yahoo_symbol, body.yahoo_symbol)
+        elif existing:
+            new_yahoo = (existing.get("yahoo_symbol") or "") or _normalize_yahoo_symbol(new_symbol, None)
+        else:
+            new_yahoo = _normalize_yahoo_symbol(new_symbol, body.yahoo_symbol)
+        new_company = body.company_name if body.company_name is not None else (existing.get("company_name") if existing else "") or ""
+        lookback = body.lookback_days if body.lookback_days is not None else 3650
+        lookback = max(1, min(lookback, 3650 * 2))
+        fetched = False
+        error_message = None
 
-    new_symbol = body.symbol.strip().upper() if body.symbol and body.symbol.strip() else current_symbol
-    if body.yahoo_symbol:
-        new_yahoo = _normalize_yahoo_symbol(body.yahoo_symbol, body.yahoo_symbol)
-    elif new_symbol != current_symbol:
-        new_yahoo = _normalize_yahoo_symbol(new_symbol, None)
-    else:
-        new_yahoo = existing["yahoo_symbol"] or _normalize_yahoo_symbol(current_symbol, None)
-    new_company = body.company_name if body.company_name is not None else existing["company_name"]
-    lookback = body.lookback_days if body.lookback_days is not None else 3650
-    lookback = max(1, min(lookback, 3650 * 2))
-    fetched = False
-    error_message = None
+        existing_key = (existing.get("symbol") or current_symbol).strip().upper() if existing else None
+        if not existing:
+            add_universe_symbol(config.cache_dir, new_symbol, yahoo_symbol=new_yahoo, company_name=new_company or "")
+            refetch_symbol = None
+        elif new_symbol != existing_key:
+            remove_universe_symbol(config.cache_dir, existing_key)
+            add_universe_symbol(config.cache_dir, new_symbol, yahoo_symbol=new_yahoo, company_name=new_company or "")
+            refetch_symbol = new_yahoo
+        else:
+            update_universe_symbol(config.cache_dir, existing_key, company_name=new_company, yahoo_symbol=new_yahoo)
+            refetch_symbol = new_yahoo if (body.yahoo_symbol is not None and new_yahoo != (existing.get("yahoo_symbol") or "")) else None
 
-    if new_symbol != current_symbol:
-        remove_universe_symbol(config.cache_dir, current_symbol)
-        add_universe_symbol(config.cache_dir, new_symbol, yahoo_symbol=new_yahoo, company_name=new_company or "")
-        refetch_symbol = new_yahoo
-    else:
-        update_universe_symbol(config.cache_dir, current_symbol, company_name=new_company, yahoo_symbol=new_yahoo)
-        refetch_symbol = new_yahoo if (body.yahoo_symbol is not None and new_yahoo != (existing["yahoo_symbol"] or "")) else None
-
-    if provider and refetch_symbol:
-        end_date = date.today()
-        def fetcher(sym: str, start: date, end: date):
-            return provider.get_daily_ohlcv(sym, start, end)
-        def fetch_for_days(sym: str, days: int):
-            start_date = end_date - timedelta(days=days)
-            return get_cached_or_fetch(config.cache_dir, sym, start_date, end_date, fetcher, use_cache=True)
-        try:
-            df = fetch_for_days(refetch_symbol, lookback)
-            if df is not None and not getattr(df, "empty", True) and len(df) >= 1:
-                fetched = True
-            else:
-                df_short = fetch_for_days(refetch_symbol, 365)
-                if df_short is not None and not getattr(df_short, "empty", True) and len(df_short) >= 1:
+        if provider and refetch_symbol:
+            end_date = date.today()
+            def fetcher(sym: str, start: date, end: date):
+                return provider.get_daily_ohlcv(sym, start, end)
+            def fetch_for_days(sym: str, days: int):
+                start_date = end_date - timedelta(days=days)
+                return get_cached_or_fetch(config.cache_dir, sym, start_date, end_date, fetcher, use_cache=True)
+            try:
+                df = fetch_for_days(refetch_symbol, lookback)
+                if df is not None and not getattr(df, "empty", True) and len(df) >= 1:
                     fetched = True
-                    error_message = "Refetched 1 year only. Use Data seed for more."
-        except Exception as e:
-            error_message = str(e) or type(e).__name__
+                else:
+                    df_short = fetch_for_days(refetch_symbol, 365)
+                    if df_short is not None and not getattr(df_short, "empty", True) and len(df_short) >= 1:
+                        fetched = True
+                        error_message = "Refetched 1 year only. Use Data seed for more."
+            except Exception as e:
+                error_message = str(e) or type(e).__name__
 
-    out = get_universe_symbol(config.cache_dir, new_symbol) or {"symbol": new_symbol, "yahoo_symbol": new_yahoo, "company_name": new_company or ""}
-    out["fetched"] = fetched
-    out["error_message"] = error_message
-    return out
+        out = get_universe_symbol(config.cache_dir, new_symbol) or {"symbol": new_symbol, "yahoo_symbol": new_yahoo, "company_name": new_company or ""}
+        out["fetched"] = fetched
+        out["error_message"] = error_message
+        return out
+    except Exception as e:
+        from fastapi import HTTPException
+        if isinstance(e, HTTPException):
+            raise
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e) or type(e).__name__)
 
 
 @router.delete("/universe/{symbol}")

@@ -67,6 +67,11 @@ backtest:
   default_lookback_days: 90
   default_hold_days: 5
   default_step_days: 5
+  # Optional: override rule-builder schema (indicators, flags, operators). Omit to use built-in defaults.
+  rule_schema:
+    indicators: [rsi, macd, macd_signal, macd_hist, sma_20, sma_50, sma_200, ema_12, ema_26, atr, bb_upper, bb_mid, bb_lower, obv, close]
+    flags: [rsi_oversold, rsi_overbought, macd_bullish, macd_bearish, above_sma200, below_sma200]
+    operators: ["<", "<=", ">", ">=", "==", "!="]
 
 refresh:
   refresh_enabled: true

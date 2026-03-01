@@ -5,17 +5,18 @@ from datetime import date, timedelta
 from typing import Any, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from src.config_loader import get_config
 from src.data.cache import get_cached_or_fetch
 from src.data.symbols import resolve_symbol
-from src.db.app_db import get_global_default_strategy, get_strategy
+from src.db.app_db import get_global_default_strategy, get_strategy, save_backtest_run, list_backtest_runs, get_backtest_run
 from src.analysis.indicators import compute_indicators
 from src.analysis.volume_structure import volume_summary, structure_summary
 from src.analysis.trend import trend_summary, pattern_flags
 from src.analysis.risk import risk_summary
+from src.analysis.rule_engine import rule_signal_from_rules
 from src.backtest.runner import run_backtest
 from src.backtest.metrics import compute_metrics
 
@@ -24,6 +25,35 @@ router = APIRouter()
 
 class MetricsRequest(BaseModel):
     rows: list[dict]  # each: date, signal/action, forward_return
+
+
+# Fallback schema when config.backtest.rule_schema is not set (see docs/BACKTEST_RULES.md).
+_DEFAULT_RULE_INDICATORS = [
+    "rsi", "macd", "macd_signal", "macd_hist",
+    "sma_20", "sma_50", "sma_200", "ema_12", "ema_26",
+    "atr", "bb_upper", "bb_mid", "bb_lower", "obv", "close",
+]
+_DEFAULT_RULE_FLAGS = ["rsi_oversold", "rsi_overbought", "macd_bullish", "macd_bearish", "above_sma200", "below_sma200"]
+_DEFAULT_RULE_OPERATORS = ["<", "<=", ">", ">=", "==", "!="]
+
+
+@router.get("/backtest/rule-schema")
+def get_backtest_rule_schema() -> dict:
+    """Return available indicator keys, flags, and operators from config (or built-in defaults)."""
+    config = get_config()
+    schema = getattr(config.backtest, "rule_schema", None) if config.backtest else None
+    if schema and isinstance(schema, dict):
+        indicators = schema.get("indicators")
+        flags = schema.get("flags")
+        operators = schema.get("operators")
+    else:
+        indicators = flags = operators = None
+    return {
+        "indicators": indicators if isinstance(indicators, list) else _DEFAULT_RULE_INDICATORS,
+        "flags": flags if isinstance(flags, list) else _DEFAULT_RULE_FLAGS,
+        "operators": operators if isinstance(operators, list) else _DEFAULT_RULE_OPERATORS,
+        "docs": "See docs/BACKTEST_RULES.md for rule format (and/or/not, indicator vs value, indicator vs indicator, flag).",
+    }
 
 
 @router.post("/metrics")
@@ -42,10 +72,17 @@ class BacktestRequest(BaseModel):
     hold_days: Optional[int] = None
     step_days: Optional[int] = None
     strategy_id: Optional[str] = None
+    params: Optional[dict[str, Any]] = None  # inline override: e.g. buy_rule, sell_rule (merged over strategy params)
 
 
 def _rule_signal(indicators: dict, flags: list, params: dict) -> tuple[str, str]:
-    """Rule-based signal from indicators and flags; params can override thresholds."""
+    """Rule-based signal: use custom buy_rule/sell_rule if present, else built-in rules."""
+    buy_rule = params.get("buy_rule")
+    sell_rule = params.get("sell_rule")
+    if buy_rule is not None or sell_rule is not None:
+        return rule_signal_from_rules(buy_rule, sell_rule, indicators, flags)
+
+    # Built-in rules (backward compatible)
     rsi_buy = params.get("rsi_buy_below", 30)
     rsi_sell = params.get("rsi_sell_above", 70)
     rsi = indicators.get("rsi")
@@ -83,6 +120,8 @@ def _run_analysis_for_date(
     if df.empty or len(df) < 20:
         return {"signal": {"action": "HOLD", "confidence": 0.0, "reason": "Insufficient data"}}
     df, indicators = compute_indicators(df, config.analysis.indicators)
+    if not df.empty and "Close" in df.columns:
+        indicators = {**indicators, "close": float(df["Close"].iloc[-1])}
     trend_sum = trend_summary(df, indicators)
     flags = pattern_flags(df, indicators)
     params = strategy_params or {}
@@ -133,6 +172,8 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
 
     for sym in symbols:
         strategy_params, info = _resolve_strategy_params(cache_dir, body.strategy_id, assignments, sym)
+        if body.params:
+            strategy_params = {**strategy_params, **body.params}
         strategy_info = info
 
         def run_analysis(sym: str, s: date, e: date, params: dict = strategy_params):
@@ -186,6 +227,30 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
     metrics = compute_metrics(all_rows, signal_key="signal", return_key="forward_return", action_key="action")
     result = {"metrics": metrics, "rows": all_rows, "strategy": strategy_info, "by_symbol": by_symbol}
 
+    run_params = {
+        "lookback_days": lookback_days,
+        "hold_days": hold_days,
+        "step_days": step_days,
+    }
+    if body.params:
+        run_params.update(body.params)
+    try:
+        saved = save_backtest_run(
+            cache_dir,
+            strategy_id=body.strategy_id,
+            strategy_name=strategy_info.get("name", "Rule-based"),
+            strategy_description=strategy_info.get("description", ""),
+            symbols=symbols,
+            start_date=body.start,
+            end_date=body.end,
+            params=run_params,
+            metrics=metrics,
+            rows=all_rows,
+        )
+        result["run_id"] = saved["id"]
+    except Exception:
+        result["run_id"] = None
+
     def _sanitize_json(obj: Any) -> Any:
         """Replace nan/inf floats with None so JSON serialization does not fail."""
         if isinstance(obj, dict):
@@ -197,3 +262,43 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
         return obj
 
     return _sanitize_json(result)
+
+
+@router.get("/backtest/history")
+def get_backtest_history(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    symbol: Optional[str] = Query(None),
+    strategy_id: Optional[str] = Query(None),
+) -> dict:
+    """List saved backtest runs (newest first). Optional filters: symbol, strategy_id."""
+    config = get_config()
+    runs = list_backtest_runs(config.cache_dir, limit=limit, offset=offset, symbol=symbol, strategy_id=strategy_id)
+    return {"runs": runs, "count": len(runs)}
+
+
+@router.get("/backtest/history/{run_id}")
+def get_backtest_run_by_id(run_id: str) -> dict:
+    """Retrieve a single backtest run by id. Response shape matches POST /backtest for UI compatibility."""
+    config = get_config()
+    run = get_backtest_run(config.cache_dir, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Backtest run not found")
+    rows = run.get("rows") or []
+    by_symbol: dict[str, dict] = {}
+    for r in rows:
+        sym = r.get("symbol", "")
+        if sym and sym not in by_symbol:
+            by_symbol[sym] = {"metrics": None, "rows_count": sum(1 for x in rows if x.get("symbol") == sym)}
+    out = {
+        "run_id": run["id"],
+        "metrics": run.get("metrics", {}),
+        "rows": rows,
+        "strategy": run.get("strategy", {"name": run.get("strategy_name", "Rule-based"), "description": run.get("strategy_description", "")}),
+        "by_symbol": by_symbol,
+        "created_at": run.get("created_at"),
+        "start_date": run.get("start_date"),
+        "end_date": run.get("end_date"),
+        "symbols": run.get("symbols", []),
+    }
+    return out

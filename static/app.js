@@ -266,11 +266,27 @@
     return days + ' days';
   }
 
+  var backtestSymbolsArray = ['RELIANCE'];
+
+  function renderBacktestSymbolsList() {
+    var container = document.getElementById('backtest-symbols-list');
+    if (!container) return;
+    container.innerHTML = '';
+    backtestSymbolsArray.forEach(function (sym) {
+      var chip = document.createElement('span');
+      chip.className = 'symbol-chip';
+      chip.innerHTML = '<span>' + escapeHtml(sym) + '</span><button type="button" class="symbol-chip-remove" data-symbol="' + escapeHtml(sym) + '" aria-label="Remove ' + escapeHtml(sym) + '">×</button>';
+      chip.querySelector('.symbol-chip-remove').addEventListener('click', function () {
+        var s = this.getAttribute('data-symbol');
+        backtestSymbolsArray = backtestSymbolsArray.filter(function (x) { return x !== s; });
+        renderBacktestSymbolsList();
+      });
+      container.appendChild(chip);
+    });
+  }
+
   function getBacktestParams() {
-    var symbolsEl = document.getElementById('backtest-symbols');
-    var symbolsStr = (symbolsEl && symbolsEl.value) ? symbolsEl.value.trim() : getSymbol();
-    var symbols = symbolsStr.split(/[\s,]+/).map(function (s) { return s.trim(); }).filter(Boolean);
-    if (symbols.length === 0) symbols = [getSymbol()];
+    var symbols = backtestSymbolsArray.length ? backtestSymbolsArray.slice() : [getSymbol()];
     var strategyEl = document.getElementById('backtest-strategy');
     var strategyId = (strategyEl && strategyEl.value) ? strategyEl.value : null;
     return {
@@ -284,33 +300,240 @@
       step_days: parseInt(document.getElementById('backtest-step').value, 10) || 5,
     };
   }
+  var backtestRuleSchema = null;
+
+  async function loadBacktestRuleSchema() {
+    if (backtestRuleSchema) return backtestRuleSchema;
+    try {
+      var res = await fetchJson(API_BASE + '/backtest/rule-schema');
+      backtestRuleSchema = {
+        indicators: Array.isArray(res.indicators) ? res.indicators : [],
+        flags: Array.isArray(res.flags) ? res.flags : [],
+        operators: Array.isArray(res.operators) ? res.operators : ['<', '<=', '>', '>=', '==', '!='],
+      };
+      return backtestRuleSchema;
+    } catch (e) {
+      console.warn('Failed to load rule schema', e);
+      backtestRuleSchema = { indicators: [], flags: [], operators: ['<', '<=', '>', '>=', '==', '!='] };
+      return backtestRuleSchema;
+    }
+  }
+
+  function buildRuleConditionRow(ruleType, schema) {
+    var li = document.createElement('li');
+    li.className = 'rule-condition-row';
+    var typeSelect = document.createElement('select');
+    typeSelect.className = 'rule-condition-type';
+    typeSelect.setAttribute('aria-label', 'Condition type');
+    typeSelect.innerHTML = '<option value="indicator_value">Indicator vs number</option><option value="indicator_indicator">Indicator vs indicator</option><option value="flag">Flag</option>';
+    var wrap = document.createElement('div');
+    wrap.className = 'rule-condition-fields';
+    var indicators = schema.indicators || [];
+    var flags = schema.flags || [];
+    var operators = schema.operators || [];
+    function fillSelect(sel, options, placeholder) {
+      sel.innerHTML = '';
+      if (placeholder) {
+        var o = document.createElement('option');
+        o.value = '';
+        o.textContent = placeholder;
+        sel.appendChild(o);
+      }
+      options.forEach(function (val) {
+        var o = document.createElement('option');
+        o.value = val;
+        o.textContent = val;
+        sel.appendChild(o);
+      });
+    }
+    var leftSelect = document.createElement('select');
+    leftSelect.className = 'rule-left';
+    fillSelect(leftSelect, indicators, '—');
+    var opSelect = document.createElement('select');
+    opSelect.className = 'rule-op';
+    fillSelect(opSelect, operators);
+    var valueInput = document.createElement('input');
+    valueInput.type = 'number';
+    valueInput.className = 'rule-value';
+    valueInput.placeholder = 'Value';
+    valueInput.setAttribute('aria-label', 'Numeric value');
+    var rightSelect = document.createElement('select');
+    rightSelect.className = 'rule-right';
+    fillSelect(rightSelect, indicators, '—');
+    var flagSelect = document.createElement('select');
+    flagSelect.className = 'rule-flag';
+    fillSelect(flagSelect, flags, '—');
+    flagSelect.style.display = 'none';
+    function onTypeChange() {
+      var t = typeSelect.value;
+      leftSelect.style.display = t === 'flag' ? 'none' : '';
+      opSelect.style.display = t === 'flag' ? 'none' : '';
+      valueInput.style.display = t === 'indicator_value' ? '' : 'none';
+      rightSelect.style.display = t === 'indicator_indicator' ? '' : 'none';
+      flagSelect.style.display = t === 'flag' ? '' : 'none';
+    }
+    typeSelect.addEventListener('change', onTypeChange);
+    onTypeChange();
+    wrap.appendChild(leftSelect);
+    wrap.appendChild(opSelect);
+    wrap.appendChild(valueInput);
+    wrap.appendChild(rightSelect);
+    wrap.appendChild(flagSelect);
+    var removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-sm rule-condition-remove';
+    removeBtn.textContent = 'Remove';
+    removeBtn.setAttribute('aria-label', 'Remove condition');
+    li.appendChild(typeSelect);
+    li.appendChild(wrap);
+    li.appendChild(removeBtn);
+    return li;
+  }
+
+  function serializeRuleConditions(container, combineMode) {
+    var rows = container ? container.querySelectorAll('.rule-condition-row') : [];
+    var conditions = [];
+    rows.forEach(function (li) {
+      var typeSel = li.querySelector('.rule-condition-type');
+      var type = typeSel ? typeSel.value : '';
+      if (type === 'indicator_value') {
+        var left = li.querySelector('.rule-left');
+        var op = li.querySelector('.rule-op');
+        var val = li.querySelector('.rule-value');
+        var leftVal = left && left.value;
+        var opVal = op && op.value;
+        var numVal = val && val.value !== '' ? parseFloat(val.value) : null;
+        if (leftVal && opVal && numVal !== null && !isNaN(numVal)) {
+          conditions.push({ indicator: leftVal, op: opVal, value: numVal });
+        }
+      } else if (type === 'indicator_indicator') {
+        var left = li.querySelector('.rule-left');
+        var op = li.querySelector('.rule-op');
+        var right = li.querySelector('.rule-right');
+        var l = left && left.value;
+        var r = right && right.value;
+        var o = op && op.value;
+        if (l && r && o) {
+          conditions.push({ left: l, op: o, right: r });
+        }
+      } else if (type === 'flag') {
+        var flag = li.querySelector('.rule-flag');
+        var f = flag && flag.value;
+        if (f) {
+          conditions.push({ flag: f });
+        }
+      }
+    });
+    if (conditions.length === 0) return null;
+    if (conditions.length === 1) return conditions[0];
+    return combineMode === 'or' ? { or: conditions } : { and: conditions };
+  }
+
+  function getBacktestCustomParams() {
+    var useCustom = document.getElementById('backtest-use-custom-rules');
+    if (!useCustom || !useCustom.checked) return null;
+    var buyCombine = document.getElementById('backtest-buy-combine');
+    var sellCombine = document.getElementById('backtest-sell-combine');
+    var buyList = document.getElementById('backtest-buy-conditions');
+    var sellList = document.getElementById('backtest-sell-conditions');
+    var buyRule = serializeRuleConditions(buyList, buyCombine ? buyCombine.value : 'and');
+    var sellRule = serializeRuleConditions(sellList, sellCombine ? sellCombine.value : 'and');
+    if (!buyRule && !sellRule) return null;
+    var params = {};
+    if (buyRule) params.buy_rule = buyRule;
+    if (sellRule) params.sell_rule = sellRule;
+    return params;
+  }
+
   async function loadBacktestStrategies() {
     var sel = document.getElementById('backtest-strategy');
-    if (!sel) return;
-    try {
-      var res = await fetchJson(API_BASE + '/api/strategies');
-      var list = (res && res.strategies) ? res.strategies : [];
-      sel.innerHTML = '<option value="">Global default</option>';
-      list.forEach(function (s) {
-        var opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.name + (s.is_global_default ? ' (default)' : '');
-        sel.appendChild(opt);
+    if (sel) {
+      try {
+        var res = await fetchJson(API_BASE + '/api/strategies');
+        var list = (res && res.strategies) ? res.strategies : [];
+        sel.innerHTML = '<option value="">Global default</option>';
+        list.forEach(function (s) {
+          var opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name + (s.is_global_default ? ' (default)' : '');
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        console.warn('Failed to load strategies', e);
+      }
+    }
+    loadBacktestHistory();
+    var wrap = document.getElementById('backtest-rule-builder-wrap');
+    var useCustomEl = document.getElementById('backtest-use-custom-rules');
+    var builderEl = document.getElementById('backtest-rule-builder');
+    var hintEl = document.getElementById('backtest-rule-builder-hint');
+    if (wrap && useCustomEl && builderEl && !wrap.dataset.useCustomBound) {
+      wrap.dataset.useCustomBound = '1';
+      useCustomEl.addEventListener('change', function () {
+        var show = useCustomEl.checked;
+        builderEl.hidden = !show;
+        if (hintEl) hintEl.hidden = !show;
+        if (show && !backtestRuleSchema) loadBacktestRuleSchema().then(function (schema) {
+          var buyList = document.getElementById('backtest-buy-conditions');
+          var sellList = document.getElementById('backtest-sell-conditions');
+          if (buyList && buyList.children.length === 0) buyList.appendChild(buildRuleConditionRow('buy', schema));
+          if (sellList && sellList.children.length === 0) sellList.appendChild(buildRuleConditionRow('sell', schema));
+        });
       });
-    } catch (e) {
-      console.warn('Failed to load strategies', e);
+    }
+    if (wrap && !wrap.dataset.ruleBuilderBound) {
+      wrap.dataset.ruleBuilderBound = '1';
+      if (useCustomEl && builderEl) { builderEl.hidden = !useCustomEl.checked; if (hintEl) hintEl.hidden = !useCustomEl.checked; }
+      var addBuy = document.querySelector('.btn-add-condition[data-rule-type="buy"]');
+      var addSell = document.querySelector('.btn-add-condition[data-rule-type="sell"]');
+      if (addBuy) {
+        addBuy.addEventListener('click', function () {
+          loadBacktestRuleSchema().then(function (schema) {
+            var list = document.getElementById('backtest-buy-conditions');
+            if (list) list.appendChild(buildRuleConditionRow('buy', schema));
+          });
+        });
+      }
+      if (addSell) {
+        addSell.addEventListener('click', function () {
+          loadBacktestRuleSchema().then(function (schema) {
+            var list = document.getElementById('backtest-sell-conditions');
+            if (list) list.appendChild(buildRuleConditionRow('sell', schema));
+          });
+        });
+      }
+      var buyList = document.getElementById('backtest-buy-conditions');
+      var sellList = document.getElementById('backtest-sell-conditions');
+      if (buyList) buyList.addEventListener('click', function (ev) {
+        if (ev.target && ev.target.classList && ev.target.classList.contains('rule-condition-remove')) {
+          var row = ev.target.closest('.rule-condition-row');
+          if (row && row.parentNode) row.parentNode.removeChild(row);
+        }
+      });
+      if (sellList) sellList.addEventListener('click', function (ev) {
+        if (ev.target && ev.target.classList && ev.target.classList.contains('rule-condition-remove')) {
+          var row = ev.target.closest('.rule-condition-row');
+          if (row && row.parentNode) row.parentNode.removeChild(row);
+        }
+      });
     }
   }
 
   async function fetchJson(url, options = {}) {
-    const res = await fetch(url, {
-      headers: options.headers || {},
-      ...options,
-    });
-    if (!res.ok) throw new Error(res.statusText || 'Request failed');
-    const text = await res.text();
+    var opts = { method: options.method || 'GET', headers: options.headers || {} };
+    if (options.body !== undefined) opts.body = options.body;
+    var res = await fetch(url, opts);
+    var text = await res.text();
+    if (!res.ok) {
+      var msg = res.status + ' ' + (res.statusText || 'Request failed');
+      try {
+        var errBody = JSON.parse(text);
+        if (errBody.detail) msg = typeof errBody.detail === 'string' ? errBody.detail : (errBody.detail.msg || msg);
+      } catch (e) { /* ignore */ }
+      throw new Error(msg);
+    }
     try {
-      return JSON.parse(text);
+      return text ? JSON.parse(text) : {};
     } catch (e) {
       console.warn('fetchJson: response was not JSON. Content-Type:', res.headers.get('Content-Type'), 'body length:', text.length);
       throw new Error('Invalid JSON response');
@@ -814,6 +1037,101 @@
     }
   }
 
+  function renderBacktestResult(res) {
+    var rows = res.rows || [];
+    var metrics = res.metrics || {};
+    var portfolio = metrics.portfolio || {};
+    var bySignal = metrics.by_signal || {};
+    var strategy = res.strategy || {};
+    document.getElementById('backtest-strategy-name').textContent = strategy.name || 'Rule-based';
+    document.getElementById('backtest-strategy-desc').textContent = strategy.description || '';
+    document.getElementById('backtest-strategy-desc').hidden = !strategy.description;
+    var cum = 1;
+    var equityData = [];
+    rows.forEach(function (r) {
+      var ret = Number(r.forward_return) || 0;
+      if (r.action === 'SELL') ret = -ret;
+      if (r.action === 'HOLD') ret = 0;
+      cum *= 1 + ret;
+      equityData.push({ time: ensureTime(r.date), value: cum });
+    });
+    if (equityData.length) {
+      var container = document.getElementById('chart-equity');
+      if (container) buildEquityChart(container, equityData);
+    }
+    var metricTradeCount = document.getElementById('metric-trade-count');
+    var metricWinRate = document.getElementById('metric-win-rate');
+    var metricAvgReturn = document.getElementById('metric-avg-return');
+    var metricSharpe = document.getElementById('metric-sharpe');
+    var metricMaxDd = document.getElementById('metric-max-dd');
+    if (metricTradeCount) metricTradeCount.textContent = formatInt(portfolio.trade_count);
+    if (metricWinRate) metricWinRate.textContent = formatPct(portfolio.win_rate, 1);
+    if (metricAvgReturn) metricAvgReturn.textContent = formatPct(portfolio.avg_return, 2);
+    if (metricSharpe) metricSharpe.textContent = portfolio.sharpe != null ? formatNum(portfolio.sharpe, 2) : '—';
+    if (metricMaxDd) metricMaxDd.textContent = formatPct(portfolio.max_drawdown, 2);
+    var tbody = document.querySelector('#table-by-signal tbody');
+    if (tbody) {
+      tbody.innerHTML = '';
+      ['BUY', 'SELL', 'HOLD'].forEach(function (sig) {
+        var s = bySignal[sig] || {};
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + sig + '</td><td class="num">' + formatInt(s.count) + '</td><td class="num">' + formatPct(s.win_rate, 1) + '</td><td class="num">' + (s.avg_return != null ? formatPct(s.avg_return, 2) : '—') + '</td>';
+        tbody.appendChild(tr);
+      });
+    }
+    var resultsEl = document.getElementById('backtest-results');
+    if (resultsEl) resultsEl.hidden = false;
+  }
+
+  async function loadBacktestHistory() {
+    var listEl = document.getElementById('backtest-history-list');
+    var loadingEl = document.getElementById('backtest-history-loading');
+    if (!listEl) return;
+    if (loadingEl) loadingEl.hidden = false;
+    listEl.innerHTML = '';
+    try {
+      var res = await fetchJson(API_BASE + '/backtest/history?limit=50');
+      var runs = res.runs || [];
+      if (runs.length === 0) {
+        listEl.innerHTML = '<li class="backtest-history-empty">No saved runs yet. Run a backtest to add one.</li>';
+      } else {
+        runs.forEach(function (run) {
+          var li = document.createElement('li');
+          li.className = 'backtest-history-item';
+          var created = run.created_at ? run.created_at.replace('T', ' ').substring(0, 19) : '—';
+          var symbolsStr = Array.isArray(run.symbols) ? run.symbols.join(', ') : (run.symbols || '—');
+          var portfolio = run.portfolio || {};
+          var winRate = portfolio.win_rate != null ? formatPct(portfolio.win_rate, 1) : '—';
+          var sharpe = portfolio.sharpe != null ? formatNum(portfolio.sharpe, 2) : '—';
+          li.innerHTML = '<div class="backtest-history-item-main">' +
+            '<span class="backtest-history-date">' + escapeHtml(created) + '</span>' +
+            '<span class="backtest-history-symbols">' + escapeHtml(symbolsStr) + '</span>' +
+            '<span class="backtest-history-strategy">' + escapeHtml(run.strategy_name || '—') + '</span>' +
+            '<span class="backtest-history-range">' + escapeHtml(run.start_date || '') + ' → ' + escapeHtml(run.end_date || '') + '</span>' +
+            '<span class="backtest-history-metrics">Win ' + winRate + ' · Sharpe ' + sharpe + '</span>' +
+            '</div>' +
+            '<button type="button" class="btn btn-sm btn-primary backtest-history-view" data-run-id="' + escapeHtml(run.id) + '">View</button>';
+          var btn = li.querySelector('.backtest-history-view');
+          if (btn) {
+            btn.addEventListener('click', function () {
+              var id = this.getAttribute('data-run-id');
+              if (!id) return;
+              fetchJson(API_BASE + '/backtest/history/' + encodeURIComponent(id)).then(function (data) {
+                renderBacktestResult(data);
+              }).catch(function (e) {
+                alert('Failed to load run: ' + (e.message || String(e)));
+              });
+            });
+          }
+          listEl.appendChild(li);
+        });
+      }
+    } catch (e) {
+      listEl.innerHTML = '<li class="backtest-history-error">Failed to load history: ' + escapeHtml(e.message || String(e)) + '</li>';
+    }
+    if (loadingEl) loadingEl.hidden = true;
+  }
+
   async function runBacktest() {
     const params = getBacktestParams();
     const loading = document.getElementById('backtest-loading');
@@ -834,55 +1152,17 @@
       body.symbol = params.symbol || params.symbols[0];
       if (params.strategy_id) body.strategy_id = params.strategy_id;
     }
+    var customParams = getBacktestCustomParams();
+    if (customParams) body.params = customParams;
     try {
       const res = await fetchJson(`${API_BASE}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const rows = res.rows || [];
-      const metrics = res.metrics || {};
-      const portfolio = metrics.portfolio || {};
-      const bySignal = metrics.by_signal || {};
-      const strategy = res.strategy || {};
-
-      document.getElementById('backtest-strategy-name').textContent = strategy.name || 'Rule-based';
-      document.getElementById('backtest-strategy-desc').textContent = strategy.description || '';
-      document.getElementById('backtest-strategy-desc').hidden = !strategy.description;
-
-      let cum = 1;
-      const equityData = [];
-      const returns = [];
-      rows.forEach((r) => {
-        let ret = Number(r.forward_return) || 0;
-        if (r.action === 'SELL') ret = -ret;
-        if (r.action === 'HOLD') ret = 0;
-        returns.push(ret);
-        cum *= 1 + ret;
-        equityData.push({ time: ensureTime(r.date), value: cum });
-      });
-      if (equityData.length) {
-        const container = document.getElementById('chart-equity');
-        buildEquityChart(container, equityData);
-      }
-
-      document.getElementById('metric-trade-count').textContent = formatInt(portfolio.trade_count);
-      document.getElementById('metric-win-rate').textContent = formatPct(portfolio.win_rate, 1);
-      document.getElementById('metric-avg-return').textContent = formatPct(portfolio.avg_return, 2);
-      document.getElementById('metric-sharpe').textContent = portfolio.sharpe != null ? formatNum(portfolio.sharpe, 2) : '—';
-      document.getElementById('metric-max-dd').textContent = formatPct(portfolio.max_drawdown, 2);
-
-      const tbody = document.querySelector('#table-by-signal tbody');
-      tbody.innerHTML = '';
-      ['BUY', 'SELL', 'HOLD'].forEach((sig) => {
-        const s = bySignal[sig] || {};
-        const tr = document.createElement('tr');
-        tr.innerHTML =
-          '<td>' + sig + '</td><td class="num">' + formatInt(s.count) + '</td><td class="num">' + formatPct(s.win_rate, 1) + '</td><td class="num">' + (s.avg_return != null ? formatPct(s.avg_return, 2) : '—') + '</td>';
-        tbody.appendChild(tr);
-      });
+      renderBacktestResult(res);
       loading.hidden = true;
-      resultsEl.hidden = false;
+      loadBacktestHistory();
     } catch (e) {
       loading.textContent = 'Error: ' + (e.message || String(e));
       loading.hidden = false;
@@ -957,9 +1237,11 @@
               tr.appendChild(td);
             });
             var baseSymbol = (row.symbol || '').split('.')[0].trim().toUpperCase() || (row.symbol || '');
+            var yahooSymbol = (row.symbol || '').trim();
+            var companyName = (row.company_name || '').trim();
             var tdActions = document.createElement('td');
             tdActions.className = 'dashboard-actions-col';
-            tdActions.innerHTML = '<button type="button" class="btn btn-secondary btn-sm btn-edit-stock" data-symbol="' + escapeHtml(baseSymbol) + '" title="Edit symbol, Yahoo symbol, or company name">Edit</button> <button type="button" class="btn btn-secondary btn-sm btn-remove-stock" data-symbol="' + escapeHtml(baseSymbol) + '" title="Remove from universe (removes from dashboard and symbol dropdown)">Remove</button>';
+            tdActions.innerHTML = '<button type="button" class="btn btn-secondary btn-sm btn-edit-stock" data-symbol="' + escapeHtml(baseSymbol) + '" data-yahoo="' + escapeHtml(yahooSymbol) + '" data-company="' + escapeHtml(companyName) + '" title="Edit symbol, Yahoo symbol, or company name">Edit</button> <button type="button" class="btn btn-secondary btn-sm btn-remove-stock" data-symbol="' + escapeHtml(baseSymbol) + '" title="Remove from universe (removes from dashboard and symbol dropdown)">Remove</button>';
             tr.appendChild(tdActions);
             tbody.appendChild(tr);
           } catch (rowErr) {
@@ -1059,116 +1341,118 @@
   var btnRunBacktest = document.getElementById('btn-run-backtest');
   if (btnRunBacktest) btnRunBacktest.addEventListener('click', runBacktest);
 
-  // --- Analysis symbol: searchable dropdown (all stocks from universe) ---
-  var analysisUniverseSymbols = null;
-  var analysisSymbolListOpen = false;
-  var analysisSymbolHighlightIndex = -1;
+  // --- Reusable symbol combobox (shared universe cache) ---
+  var universeSymbols = null;
 
-  async function loadAnalysisUniverse() {
-    if (analysisUniverseSymbols) return analysisUniverseSymbols;
+  function invalidateUniverseCache() {
+    universeSymbols = null;
+  }
+
+  async function loadUniverse() {
+    if (universeSymbols) return universeSymbols;
     try {
       var res = await fetchJson(API_BASE + '/api/data/universe');
       var list = (res && res.symbols) ? res.symbols : [];
-      analysisUniverseSymbols = list.map(function (s) {
+      universeSymbols = list.map(function (s) {
         return {
           symbol: (s.symbol || s.yahoo_symbol || '').trim(),
           name: (s.company_name || '').trim(),
         };
       }).filter(function (s) { return s.symbol; });
     } catch (e) {
-      console.warn('Failed to load universe for analysis symbol dropdown', e);
-      analysisUniverseSymbols = [];
+      console.warn('Failed to load universe for symbol combobox', e);
+      universeSymbols = [];
     }
-    return analysisUniverseSymbols;
+    return universeSymbols;
   }
 
-  function filterAnalysisSymbols(query) {
-    if (!analysisUniverseSymbols) return [];
-    var q = (query || '').trim().toLowerCase();
-    if (!q) return analysisUniverseSymbols.slice(0, 150);
-    return analysisUniverseSymbols.filter(function (s) {
-      return s.symbol.toLowerCase().indexOf(q) >= 0 || (s.name && s.name.toLowerCase().indexOf(q) >= 0);
-    }).slice(0, 150);
-  }
-
-  function renderAnalysisSymbolList(filterQuery) {
-    var listbox = document.getElementById('analysis-symbol-listbox');
-    var input = document.getElementById('analysis-symbol-input');
-    if (!listbox || !input) return;
-    var filtered = filterAnalysisSymbols(filterQuery != null ? filterQuery : input.value);
-    listbox.innerHTML = '';
-    if (filtered.length === 0) {
-      var li = document.createElement('li');
-      li.className = 'combobox-option-no-match';
-      li.setAttribute('role', 'option');
-      li.textContent = 'No matching stocks';
-      listbox.appendChild(li);
-    } else {
-      filtered.forEach(function (s, i) {
-        var li = document.createElement('li');
-        li.setAttribute('role', 'option');
-        li.setAttribute('data-symbol', s.symbol);
-        li.setAttribute('data-index', String(i));
-        var symSpan = document.createElement('span');
-        symSpan.className = 'combobox-option-symbol';
-        symSpan.textContent = s.symbol;
-        li.appendChild(symSpan);
-        if (s.name) {
-          var nameSpan = document.createElement('span');
-          nameSpan.className = 'combobox-option-name';
-          nameSpan.textContent = s.name;
-          li.appendChild(nameSpan);
-        }
-        li.addEventListener('click', function () {
-          var sym = this.getAttribute('data-symbol');
-          if (sym) {
-            input.value = sym;
-            input.setAttribute('aria-expanded', 'false');
-            listbox.hidden = true;
-            analysisSymbolListOpen = false;
-            analysisSymbolHighlightIndex = -1;
-          }
-        });
-        listbox.appendChild(li);
-      });
-    }
-    listbox.hidden = false;
-    analysisSymbolListOpen = true;
-    analysisSymbolHighlightIndex = -1;
-    input.setAttribute('aria-expanded', 'true');
-  }
-
-  function closeAnalysisSymbolList() {
-    var listbox = document.getElementById('analysis-symbol-listbox');
-    var input = document.getElementById('analysis-symbol-input');
-    if (listbox) listbox.hidden = true;
-    if (input) input.setAttribute('aria-expanded', 'false');
-    analysisSymbolListOpen = false;
-    analysisSymbolHighlightIndex = -1;
-  }
-
-  function setupAnalysisSymbolCombobox() {
-    var input = document.getElementById('analysis-symbol-input');
-    var listbox = document.getElementById('analysis-symbol-listbox');
-    var trigger = document.getElementById('analysis-symbol-trigger');
+  function createSymbolCombobox(options) {
+    var input = options.input || document.getElementById(options.inputId);
+    var listbox = options.listbox || document.getElementById(options.listboxId);
+    var trigger = options.triggerId ? document.getElementById(options.triggerId) : (options.trigger || null);
+    var onSelect = options.onSelect || null;
+    var allowCustom = options.allowCustom === true;
     if (!input || !listbox) return;
 
+    var listOpen = false;
+    var highlightIndex = -1;
+
+    function filterSymbols(query) {
+      if (!universeSymbols) return [];
+      var q = (query || '').trim().toLowerCase();
+      if (!q) return universeSymbols.slice(0, 150);
+      return universeSymbols.filter(function (s) {
+        return s.symbol.toLowerCase().indexOf(q) >= 0 || (s.name && s.name.toLowerCase().indexOf(q) >= 0);
+      }).slice(0, 150);
+    }
+
+    function renderList(filterQuery) {
+      var filtered = filterSymbols(filterQuery != null ? filterQuery : input.value);
+      listbox.innerHTML = '';
+      if (filtered.length === 0) {
+        var li = document.createElement('li');
+        li.className = 'combobox-option-no-match';
+        li.setAttribute('role', 'option');
+        li.textContent = 'No matching stocks';
+        listbox.appendChild(li);
+      } else {
+        filtered.forEach(function (s, i) {
+          var li = document.createElement('li');
+          li.setAttribute('role', 'option');
+          li.setAttribute('data-symbol', s.symbol);
+          var symSpan = document.createElement('span');
+          symSpan.className = 'combobox-option-symbol';
+          symSpan.textContent = s.symbol;
+          li.appendChild(symSpan);
+          if (s.name) {
+            var nameSpan = document.createElement('span');
+            nameSpan.className = 'combobox-option-name';
+            nameSpan.textContent = s.name;
+            li.appendChild(nameSpan);
+          }
+          li.addEventListener('click', function () {
+            var sym = this.getAttribute('data-symbol');
+            if (sym) {
+              input.value = sym;
+              input.setAttribute('aria-expanded', 'false');
+              listbox.hidden = true;
+              listOpen = false;
+              highlightIndex = -1;
+              if (onSelect) onSelect(sym);
+            }
+          });
+          listbox.appendChild(li);
+        });
+      }
+      listbox.hidden = false;
+      listOpen = true;
+      highlightIndex = -1;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeList() {
+      listbox.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      listOpen = false;
+      highlightIndex = -1;
+    }
+
     function openList() {
-      loadAnalysisUniverse().then(function () {
-        renderAnalysisSymbolList(input.value);
+      loadUniverse().then(function () {
+        renderList(input.value);
       });
     }
 
     input.addEventListener('focus', openList);
     input.addEventListener('input', function () {
-      loadAnalysisUniverse().then(function () {
-        renderAnalysisSymbolList(input.value);
+      loadUniverse().then(function () {
+        renderList(input.value);
       });
     });
 
     if (trigger) {
       trigger.addEventListener('click', function () {
-        if (analysisSymbolListOpen) closeAnalysisSymbolList();
+        if (listOpen) closeList();
         else {
           input.focus();
           openList();
@@ -1177,46 +1461,69 @@
     }
 
     input.addEventListener('keydown', function (ev) {
-      if (!analysisSymbolListOpen) {
+      if (!listOpen) {
         if (ev.key === 'ArrowDown' || ev.key === 'Escape') openList();
         return;
       }
-      var options = listbox.querySelectorAll('li[data-symbol]');
+      var opts = listbox.querySelectorAll('li[data-symbol]');
       if (ev.key === 'Escape') {
-        closeAnalysisSymbolList();
+        closeList();
         ev.preventDefault();
         return;
       }
       if (ev.key === 'ArrowDown') {
-        analysisSymbolHighlightIndex = Math.min(analysisSymbolHighlightIndex + 1, options.length - 1);
+        highlightIndex = Math.min(highlightIndex + 1, opts.length - 1);
         ev.preventDefault();
       } else if (ev.key === 'ArrowUp') {
-        analysisSymbolHighlightIndex = Math.max(analysisSymbolHighlightIndex - 1, -1);
+        highlightIndex = Math.max(highlightIndex - 1, -1);
         ev.preventDefault();
-      } else if (ev.key === 'Enter' && options.length && analysisSymbolHighlightIndex >= 0 && options[analysisSymbolHighlightIndex]) {
-        var sym = options[analysisSymbolHighlightIndex].getAttribute('data-symbol');
+      } else if (ev.key === 'Enter' && opts.length && highlightIndex >= 0 && opts[highlightIndex]) {
+        var sym = opts[highlightIndex].getAttribute('data-symbol');
         if (sym) {
           input.value = sym;
-          closeAnalysisSymbolList();
+          closeList();
+          if (onSelect) onSelect(sym);
         }
         ev.preventDefault();
         return;
       }
-      options.forEach(function (opt, i) {
-        opt.classList.toggle('combobox-option-active', i === analysisSymbolHighlightIndex);
+      opts.forEach(function (opt, i) {
+        opt.classList.toggle('combobox-option-active', i === highlightIndex);
       });
     });
 
     document.addEventListener('click', function (ev) {
-      if (!analysisSymbolListOpen) return;
-      if (input.contains(ev.target) || (listbox && listbox.contains(ev.target)) || (trigger && trigger.contains(ev.target))) return;
-      closeAnalysisSymbolList();
+      if (!listOpen) return;
+      if (input.contains(ev.target) || listbox.contains(ev.target) || (trigger && trigger.contains(ev.target))) return;
+      closeList();
     });
   }
 
-  setupAnalysisSymbolCombobox();
+  createSymbolCombobox({ inputId: 'analysis-symbol-input', listboxId: 'analysis-symbol-listbox', triggerId: 'analysis-symbol-trigger' });
+
+  createSymbolCombobox({ inputId: 'backtest-symbol-input', listboxId: 'backtest-symbol-listbox', triggerId: 'backtest-symbol-trigger', allowCustom: true });
+  var btnBacktestAddSymbol = document.getElementById('btn-backtest-add-symbol');
+  if (btnBacktestAddSymbol) {
+    btnBacktestAddSymbol.addEventListener('click', function () {
+      var input = document.getElementById('backtest-symbol-input');
+      var sym = input && input.value ? input.value.trim().toUpperCase() : '';
+      if (!sym) return;
+      if (backtestSymbolsArray.indexOf(sym) === -1) {
+        backtestSymbolsArray.push(sym);
+        renderBacktestSymbolsList();
+      }
+      if (input) input.value = '';
+    });
+  }
+  renderBacktestSymbolsList();
+
+  createSymbolCombobox({ inputId: 'paper-add-symbol', listboxId: 'paper-symbol-listbox', triggerId: 'paper-symbol-trigger' });
+
+  createSymbolCombobox({ inputId: 'add-stock-symbol', listboxId: 'add-stock-symbol-listbox', triggerId: 'add-stock-symbol-trigger', allowCustom: true });
+  createSymbolCombobox({ inputId: 'edit-stock-symbol', listboxId: 'edit-stock-symbol-listbox', triggerId: 'edit-stock-symbol-trigger' });
 
   var paperSelectedPortfolioId = null;
+  var paperCurrentPortfolio = null;
 
   async function loadStrategiesTab() {
     var loading = document.getElementById('strategies-loading');
@@ -1387,12 +1694,11 @@
         });
         var modal = document.getElementById('add-stock-modal');
         if (modal) modal.hidden = true;
-        analysisUniverseSymbols = null;
+        invalidateUniverseCache();
         var addedSym = (res && res.symbol) ? res.symbol : symbol;
         var analysisInput = document.getElementById('analysis-symbol-input');
         if (analysisInput) analysisInput.value = addedSym;
         if (typeof loadDashboard === 'function') loadDashboard();
-        if (typeof loadAnalysisUniverse === 'function') loadAnalysisUniverse().then(function () { if (typeof renderAnalysisSymbolList === 'function') renderAnalysisSymbolList(addedSym); });
         if (res.fetched) {
           var msg = 'Added "' + addedSym + '" and fetched data (' + (res.lookback_days || 3650) + ' days).';
           if (res.error_message) msg += ' ' + res.error_message;
@@ -1419,17 +1725,42 @@
   }
 
   async function loadPaperPortfolios() {
+    var grid = document.getElementById('paper-portfolios-grid');
+    var hint = document.getElementById('paper-list-hint');
+    if (!grid) return;
     try {
       var res = await fetchJson(API_BASE + '/api/paper/portfolios');
       var list = (res && res.portfolios) ? res.portfolios : [];
-      var ul = document.getElementById('paper-portfolios-list');
-      if (!ul) return;
-      ul.innerHTML = '';
+      grid.innerHTML = '';
+      if (hint) hint.hidden = list.length > 0;
       list.forEach(function (p) {
-        var li = document.createElement('li');
-        li.innerHTML = '<a href="#" data-portfolio-id="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</a> (' + formatNum(p.initial_capital, 0) + ' ' + (p.currency || 'INR') + ')';
-        li.querySelector('a').addEventListener('click', function (e) { e.preventDefault(); selectPaperPortfolio(p.id); });
-        ul.appendChild(li);
+        var card = document.createElement('div');
+        card.className = 'paper-portfolio-card' + (paperSelectedPortfolioId === p.id ? ' paper-portfolio-card-selected' : '');
+        card.setAttribute('data-portfolio-id', p.id);
+        var capitalStr = formatNum(p.initial_capital, 0) + ' ' + (p.currency || 'INR');
+        card.innerHTML =
+          '<div class="paper-portfolio-card-main">' +
+            '<span class="paper-portfolio-card-name">' + escapeHtml(p.name) + '</span>' +
+            '<span class="paper-portfolio-card-meta">' + escapeHtml(capitalStr) + '</span>' +
+          '</div>' +
+          '<div class="paper-portfolio-card-actions">' +
+            '<button type="button" class="btn btn-primary btn-sm btn-paper-open" data-portfolio-id="' + escapeHtml(p.id) + '">Open</button>' +
+            '<button type="button" class="btn btn-secondary btn-sm btn-paper-edit-card" data-portfolio-id="' + escapeHtml(p.id) + '" data-portfolio-name="' + escapeHtml(p.name) + '" data-portfolio-capital="' + escapeHtml(String(p.initial_capital)) + '">Edit</button>' +
+            '<button type="button" class="btn btn-secondary btn-sm btn-danger btn-paper-remove-card" data-portfolio-id="' + escapeHtml(p.id) + '" data-portfolio-name="' + escapeHtml(p.name) + '">Remove</button>' +
+          '</div>';
+        grid.appendChild(card);
+        card.querySelector('.paper-portfolio-card-main').addEventListener('click', function (e) {
+          if (!e.target || !e.target.closest('button')) selectPaperPortfolio(p.id);
+        });
+        card.querySelector('.btn-paper-open').addEventListener('click', function (e) { e.stopPropagation(); selectPaperPortfolio(p.id); });
+        card.querySelector('.btn-paper-edit-card').addEventListener('click', function (e) {
+          e.stopPropagation();
+          openEditPaperPortfolioModal(p.id, p.name, p.initial_capital);
+        });
+        card.querySelector('.btn-paper-remove-card').addEventListener('click', function (e) {
+          e.stopPropagation();
+          removePaperPortfolio(p.id, p.name);
+        });
       });
     } catch (e) {
       console.warn('Paper portfolios load failed', e);
@@ -1438,21 +1769,36 @@
   async function selectPaperPortfolio(id) {
     paperSelectedPortfolioId = id;
     var wrap = document.getElementById('paper-detail-wrap');
-    if (wrap) wrap.hidden = false;
+    var grid = document.getElementById('paper-portfolios-grid');
+    if (wrap) wrap.hidden = !id;
+    if (!id) paperCurrentPortfolio = null;
+    if (grid) {
+      [].forEach.call(grid.querySelectorAll('.paper-portfolio-card'), function (el) {
+        el.classList.toggle('paper-portfolio-card-selected', el.getAttribute('data-portfolio-id') === id);
+      });
+    }
+    if (!id) return;
     try {
       var res = await fetchJson(API_BASE + '/api/paper/portfolios/' + id);
       var p = res.portfolio;
+      paperCurrentPortfolio = p;
       var positions = res.positions || [];
       document.getElementById('paper-detail-title').textContent = p.name;
-      document.getElementById('paper-detail-meta').textContent = 'Initial: ' + formatNum(p.initial_capital, 0) + ' ' + (p.currency || 'INR');
+      document.getElementById('paper-detail-meta').textContent = 'Initial capital: ' + formatNum(p.initial_capital, 0) + ' ' + (p.currency || 'INR');
       var tbody = document.getElementById('paper-positions-tbody');
       if (tbody) {
         tbody.innerHTML = '';
-        positions.forEach(function (pos) {
-          var tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + escapeHtml(pos.symbol) + '</td><td>' + (pos.strategy_ids && pos.strategy_ids.length ? pos.strategy_ids.join(', ') : 'Default') + '</td><td><button type="button" class="btn-remove" data-symbol="' + escapeHtml(pos.symbol) + '">Remove</button></td>';
-          tbody.appendChild(tr);
-        });
+        if (positions.length === 0) {
+          var emptyTr = document.createElement('tr');
+          emptyTr.innerHTML = '<td colspan="3" class="paper-positions-empty">No stocks in this portfolio. Add one above.</td>';
+          tbody.appendChild(emptyTr);
+        } else {
+          positions.forEach(function (pos) {
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td>' + escapeHtml(pos.symbol) + '</td><td>' + (pos.strategy_ids && pos.strategy_ids.length ? pos.strategy_ids.join(', ') : 'Default') + '</td><td class="col-actions"><button type="button" class="btn-remove btn-sm" data-symbol="' + escapeHtml(pos.symbol) + '" title="Remove stock">Remove</button></td>';
+            tbody.appendChild(tr);
+          });
+        }
       }
       var snapRes = await fetchJson(API_BASE + '/api/paper/portfolios/' + id + '/snapshots');
       var snaps = (snapRes && snapRes.snapshots) ? snapRes.snapshots : [];
@@ -1462,25 +1808,124 @@
           var last = snaps[snaps.length - 1];
           snapEl.textContent = 'Last snapshot: ' + last.date + ' — Equity: ' + formatNum(last.equity, 2) + ', Cash: ' + formatNum(last.cash, 2);
         } else {
-          snapEl.textContent = 'No snapshots yet. Add positions and click Run simulation.';
+          snapEl.textContent = 'No snapshots yet. Add stocks and click Run simulation.';
         }
       }
     } catch (e) {
       console.warn('Paper portfolio detail failed', e);
     }
   }
-  var btnPaperNew = document.getElementById('btn-paper-new-portfolio');
-  if (btnPaperNew) {
-    btnPaperNew.addEventListener('click', async function () {
-      var name = prompt('Portfolio name', 'My Paper Portfolio');
-      if (!name) return;
-      var cap = parseFloat(prompt('Initial capital', '1000000'), 10) || 1000000;
+  function openAddPaperPortfolioModal() {
+    var modal = document.getElementById('paper-add-portfolio-modal');
+    var nameEl = document.getElementById('paper-add-portfolio-name');
+    var capEl = document.getElementById('paper-add-portfolio-capital');
+    var curEl = document.getElementById('paper-add-portfolio-currency');
+    if (nameEl) nameEl.value = 'My Paper Portfolio';
+    if (capEl) capEl.value = '1000000';
+    if (curEl) curEl.value = 'INR';
+    if (modal) modal.hidden = false;
+  }
+  function openEditPaperPortfolioModal(id, name, initialCapital) {
+    var modal = document.getElementById('paper-edit-portfolio-modal');
+    if (!modal) return;
+    modal.setAttribute('data-portfolio-id', id || '');
+    var nameEl = document.getElementById('paper-edit-portfolio-name');
+    var capEl = document.getElementById('paper-edit-portfolio-capital');
+    if (nameEl) nameEl.value = name || '';
+    if (capEl) capEl.value = initialCapital != null ? String(initialCapital) : '';
+    modal.hidden = false;
+  }
+  async function removePaperPortfolio(id, name) {
+    if (!confirm('Remove portfolio “‘ + (name || id) + ’”? All holdings and snapshots will be deleted. This cannot be undone.')) return;
+    try {
+      await fetchJson(API_BASE + '/api/paper/portfolios/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (paperSelectedPortfolioId === id) {
+        paperSelectedPortfolioId = null;
+        var wrap = document.getElementById('paper-detail-wrap');
+        if (wrap) wrap.hidden = true;
+      }
+      loadPaperPortfolios();
+    } catch (e) {
+      console.warn('Delete portfolio failed', e);
+      alert('Failed to remove portfolio.');
+    }
+  }
+  var btnPaperAdd = document.getElementById('btn-paper-add-portfolio');
+  if (btnPaperAdd) {
+    btnPaperAdd.addEventListener('click', function () { openAddPaperPortfolioModal(); });
+  }
+  var btnPaperAddSubmit = document.getElementById('btn-paper-add-portfolio-submit');
+  if (btnPaperAddSubmit) {
+    btnPaperAddSubmit.addEventListener('click', async function () {
+      var nameEl = document.getElementById('paper-add-portfolio-name');
+      var name = (nameEl && nameEl.value && nameEl.value.trim()) || '';
+      if (!name) { alert('Name is required.'); return; }
+      var capEl = document.getElementById('paper-add-portfolio-capital');
+      var cap = (capEl && parseFloat(capEl.value, 10)) || 1000000;
+      var curEl = document.getElementById('paper-add-portfolio-currency');
+      var currency = (curEl && curEl.value && curEl.value.trim()) || 'INR';
       try {
-        await fetchJson(API_BASE + '/api/paper/portfolios', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, initial_capital: cap, currency: 'INR' }) });
+        await fetchJson(API_BASE + '/api/paper/portfolios', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, initial_capital: cap, currency: currency }) });
+        document.getElementById('paper-add-portfolio-modal').hidden = true;
         loadPaperPortfolios();
       } catch (e) {
         console.warn('Create portfolio failed', e);
+        alert('Failed to add portfolio.');
       }
+    });
+  }
+  var btnPaperAddCancel = document.getElementById('btn-paper-add-portfolio-cancel');
+  if (btnPaperAddCancel) {
+    btnPaperAddCancel.addEventListener('click', function () { document.getElementById('paper-add-portfolio-modal').hidden = true; });
+  }
+  var btnPaperEdit = document.getElementById('btn-paper-edit-portfolio');
+  if (btnPaperEdit) {
+    btnPaperEdit.addEventListener('click', function () {
+      if (!paperSelectedPortfolioId) return;
+      var name = paperCurrentPortfolio ? paperCurrentPortfolio.name : '';
+      var cap = paperCurrentPortfolio && paperCurrentPortfolio.initial_capital != null ? paperCurrentPortfolio.initial_capital : 1000000;
+      openEditPaperPortfolioModal(paperSelectedPortfolioId, name, cap);
+    });
+  }
+  var btnPaperEditSubmit = document.getElementById('btn-paper-edit-portfolio-submit');
+  if (btnPaperEditSubmit) {
+    btnPaperEditSubmit.addEventListener('click', async function () {
+      var modal = document.getElementById('paper-edit-portfolio-modal');
+      var id = modal ? modal.getAttribute('data-portfolio-id') : '';
+      if (!id) return;
+      var nameEl = document.getElementById('paper-edit-portfolio-name');
+      var name = (nameEl && nameEl.value && nameEl.value.trim()) || '';
+      if (!name) { alert('Name is required.'); return; }
+      var capEl = document.getElementById('paper-edit-portfolio-capital');
+      var cap = (capEl && parseFloat(capEl.value, 10)) || 1000000;
+      try {
+        await fetchJson(API_BASE + '/api/paper/portfolios/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name, initial_capital: cap }) });
+        modal.hidden = true;
+        loadPaperPortfolios();
+        if (paperSelectedPortfolioId === id) selectPaperPortfolio(id);
+      } catch (e) {
+        console.warn('Update portfolio failed', e);
+        alert('Failed to save portfolio.');
+      }
+    });
+  }
+  var btnPaperEditCancel = document.getElementById('btn-paper-edit-portfolio-cancel');
+  if (btnPaperEditCancel) {
+    btnPaperEditCancel.addEventListener('click', function () { document.getElementById('paper-edit-portfolio-modal').hidden = true; });
+  }
+  var btnPaperDelete = document.getElementById('btn-paper-delete-portfolio');
+  if (btnPaperDelete) {
+    btnPaperDelete.addEventListener('click', function () {
+      if (!paperSelectedPortfolioId) return;
+      var titleEl = document.getElementById('paper-detail-title');
+      var name = titleEl ? titleEl.textContent : '';
+      removePaperPortfolio(paperSelectedPortfolioId, name);
+    });
+  }
+  var paperCloseDetail = document.getElementById('paper-close-detail');
+  if (paperCloseDetail) {
+    paperCloseDetail.addEventListener('click', function () {
+      selectPaperPortfolio(null);
     });
   }
   var btnPaperAddPosition = document.getElementById('btn-paper-add-position');
@@ -1538,10 +1983,11 @@
       var name = (document.getElementById('save-strategy-name') && document.getElementById('save-strategy-name').value) || 'My strategy';
       var desc = (document.getElementById('save-strategy-desc') && document.getElementById('save-strategy-desc').value) || '';
       try {
+        var params = getBacktestCustomParams() || { rsi_buy_below: 30, rsi_sell_above: 70 };
         await fetchJson(API_BASE + '/api/strategies', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name, description: desc, strategy_type: 'rule_based', params: { rsi_buy_below: 30, rsi_sell_above: 70 } }),
+          body: JSON.stringify({ name: name, description: desc, strategy_type: 'rule_based', params: params }),
         });
         var modal = document.getElementById('save-strategy-modal');
         if (modal) modal.hidden = true;
@@ -1560,23 +2006,19 @@
     tableDashboard.addEventListener('click', async function (ev) {
       if (ev.target && ev.target.classList && ev.target.classList.contains('btn-edit-stock')) {
         var sym = ev.target.getAttribute('data-symbol');
+        var yahoo = ev.target.getAttribute('data-yahoo') || '';
+        var company = ev.target.getAttribute('data-company') || '';
         if (!sym) return;
         var modal = document.getElementById('edit-stock-modal');
         if (!modal) return;
-        try {
-          var data = await fetchJson(API_BASE + '/api/data/universe/item/' + encodeURIComponent(sym));
-          modal.setAttribute('data-current-symbol', sym);
-          var symInput = document.getElementById('edit-stock-symbol');
-          var yahooInput = document.getElementById('edit-stock-yahoo');
-          var companyInput = document.getElementById('edit-stock-company');
-          if (symInput) symInput.value = data.symbol || sym;
-          if (yahooInput) yahooInput.value = data.yahoo_symbol || '';
-          if (companyInput) companyInput.value = data.company_name || '';
-          modal.hidden = false;
-        } catch (e) {
-          console.warn('Load symbol for edit failed', e);
-          alert('Failed to load symbol: ' + (e.message || String(e)));
-        }
+        modal.setAttribute('data-current-symbol', sym);
+        var symInput = document.getElementById('edit-stock-symbol');
+        var yahooInput = document.getElementById('edit-stock-yahoo');
+        var companyInput = document.getElementById('edit-stock-company');
+        if (symInput) symInput.value = sym;
+        if (yahooInput) yahooInput.value = yahoo;
+        if (companyInput) companyInput.value = company;
+        modal.hidden = false;
       }
       if (ev.target && ev.target.classList && ev.target.classList.contains('btn-remove-stock')) {
         var sym = ev.target.getAttribute('data-symbol');
@@ -1584,7 +2026,7 @@
         if (!confirm('Remove "' + sym + '" from universe? It will disappear from the dashboard and symbol dropdown.')) return;
         try {
           await fetchJson(API_BASE + '/api/data/universe/' + encodeURIComponent(sym), { method: 'DELETE' });
-          analysisUniverseSymbols = null;
+          invalidateUniverseCache();
           loadDashboard();
         } catch (e) {
           console.warn('Remove stock failed', e);
@@ -1607,22 +2049,19 @@
         alert('Symbol is required.');
         return;
       }
-      var body = { symbol: newSymbol };
-      if (yahooInput && yahooInput.value.trim()) body.yahoo_symbol = yahooInput.value.trim();
-      if (companyInput) body.company_name = companyInput.value.trim();
+      var body = { current_symbol: currentSym, symbol: newSymbol };
+      if (yahooInput) body.yahoo_symbol = yahooInput.value ? yahooInput.value.trim() : '';
+      if (companyInput) body.company_name = companyInput.value ? companyInput.value.trim() : '';
       var btn = this;
       btn.disabled = true;
       btn.textContent = 'Saving…';
+      var saveUrl = API_BASE + '/api/data/universe/update';
+      var saveOpts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
       try {
-        var res = await fetchJson(API_BASE + '/api/data/universe/' + encodeURIComponent(currentSym), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+        var res = await fetchJson(saveUrl, saveOpts);
         if (modal) modal.hidden = true;
-        analysisUniverseSymbols = null;
+        invalidateUniverseCache();
         loadDashboard();
-        if (res.error_message) alert(res.error_message);
       } catch (e) {
         console.warn('Edit stock failed', e);
         alert('Failed to save: ' + (e.message || String(e)));

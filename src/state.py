@@ -98,6 +98,7 @@ class BacktestConfig(BaseModel):
     default_lookback_days: int = 90
     default_hold_days: int = 5
     default_step_days: int = 5
+    rule_schema: Optional[dict[str, Any]] = None  # optional: indicators, flags, operators lists
 
 
 class APIConfig(BaseModel):

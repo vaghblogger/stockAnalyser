@@ -17,6 +17,11 @@ from src.db.app_db import (
     update_strategy,
     set_global_default_strategy,
     delete_strategy,
+    # Backtest runs
+    save_backtest_run,
+    list_backtest_runs,
+    get_backtest_run,
+    delete_backtest_run,
     # Symbol universe
     list_universe_symbols,
     add_universe_symbol,
@@ -52,6 +57,10 @@ __all__ = [
     "update_strategy",
     "set_global_default_strategy",
     "delete_strategy",
+    "save_backtest_run",
+    "list_backtest_runs",
+    "get_backtest_run",
+    "delete_backtest_run",
     "list_universe_symbols",
     "add_universe_symbol",
     "remove_universe_symbol",

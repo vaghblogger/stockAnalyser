@@ -170,7 +170,18 @@
       <section id="panel-backtest" class="tab-panel" role="tabpanel" hidden>
         <div class="panel-toolbar">
           <div class="form-inline form-backtest">
-            <div class="input-group"><label for="backtest-symbols">Symbols</label><input type="text" id="backtest-symbols" value="RELIANCE" placeholder="RELIANCE or RELIANCE, TCS, INFY"></div>
+            <div class="input-group backtest-symbols-wrap">
+              <label for="backtest-symbol-input">Symbols</label>
+              <div class="symbols-combobox-row">
+                <div class="combobox-wrap">
+                  <input type="text" id="backtest-symbol-input" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="backtest-symbol-listbox" role="combobox">
+                  <button type="button" class="combobox-trigger" id="backtest-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+                  <ul id="backtest-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+                </div>
+                <button type="button" class="btn btn-secondary" id="btn-backtest-add-symbol" title="Add symbol to list">Add</button>
+              </div>
+              <div id="backtest-symbols-list" class="symbol-chips" aria-label="Selected symbols"></div>
+            </div>
             <div class="input-group"><label for="backtest-strategy">Strategy</label><select id="backtest-strategy" aria-label="Strategy"><option value="">Global default</option></select></div>
             <div class="input-group"><label for="backtest-start">Start</label><input type="date" id="backtest-start" value="2023-01-01"></div>
             <div class="input-group"><label for="backtest-end">End</label><input type="date" id="backtest-end" value="2024-06-01"></div>
@@ -179,6 +190,32 @@
             <div class="input-group"><label for="backtest-step">Step days</label><input type="number" id="backtest-step" value="5" min="1"></div>
             <button type="button" class="btn btn-primary" id="btn-run-backtest">Run backtest</button>
             <button type="button" class="btn btn-secondary" id="btn-save-strategy" title="Save current settings as a new strategy">Save as strategy</button>
+          </div>
+        </div>
+        <div id="backtest-rule-builder-wrap" class="backtest-rule-builder-wrap">
+          <label class="rule-builder-toggle">
+            <input type="checkbox" id="backtest-use-custom-rules" aria-describedby="backtest-rule-builder-hint"> Use custom rules
+          </label>
+          <p id="backtest-rule-builder-hint" class="rule-builder-hint text-muted" hidden>Define BUY/SELL conditions with indicators and formulas (AND/OR, &lt;, &gt;, =). Schema loaded from API.</p>
+          <div id="backtest-rule-builder" class="backtest-rule-builder" hidden>
+            <div class="rule-block" data-rule-type="buy">
+              <h4 class="rule-block-title">BUY when</h4>
+              <div class="rule-block-combine">
+                <label for="backtest-buy-combine">Match</label>
+                <select id="backtest-buy-combine" aria-label="Combine conditions with AND or OR"><option value="and">All (AND)</option><option value="or">Any (OR)</option></select>
+              </div>
+              <ul id="backtest-buy-conditions" class="rule-conditions-list" aria-label="BUY conditions"></ul>
+              <button type="button" class="btn btn-secondary btn-sm btn-add-condition" data-rule-type="buy">Add condition</button>
+            </div>
+            <div class="rule-block" data-rule-type="sell">
+              <h4 class="rule-block-title">SELL when</h4>
+              <div class="rule-block-combine">
+                <label for="backtest-sell-combine">Match</label>
+                <select id="backtest-sell-combine" aria-label="Combine conditions with AND or OR"><option value="and">All (AND)</option><option value="or">Any (OR)</option></select>
+              </div>
+              <ul id="backtest-sell-conditions" class="rule-conditions-list" aria-label="SELL conditions"></ul>
+              <button type="button" class="btn btn-secondary btn-sm btn-add-condition" data-rule-type="sell">Add condition</button>
+            </div>
           </div>
         </div>
         <div id="backtest-loading" class="loading" hidden>Running backtest…</div>
@@ -210,33 +247,62 @@
             </div>
           </div>
         </div>
+
+        <div id="backtest-history-wrap" class="backtest-history-wrap">
+          <h3 class="backtest-history-title">History</h3>
+          <p class="backtest-history-hint text-muted">Saved backtest runs. Click View to load a result.</p>
+          <div id="backtest-history-loading" class="loading backtest-history-loading" hidden>Loading history…</div>
+          <ul id="backtest-history-list" class="backtest-history-list" aria-label="Backtest runs"></ul>
+        </div>
       </section>
 
       <!-- Paper Trading tab -->
       <section id="panel-paper" class="tab-panel" role="tabpanel" hidden>
-        <div class="panel-toolbar">
-          <button type="button" class="btn btn-primary" id="btn-paper-new-portfolio">New portfolio</button>
+        <div class="panel-toolbar paper-toolbar">
+          <h2 class="paper-heading">Paper trading</h2>
+          <button type="button" class="btn btn-primary" id="btn-paper-add-portfolio">Add portfolio</button>
         </div>
         <div id="paper-body" class="paper-body">
-          <div id="paper-list-wrap">
-            <h3>Portfolios</h3>
-            <ul id="paper-portfolios-list" class="paper-list"></ul>
+          <div id="paper-list-wrap" class="paper-list-wrap">
+            <p id="paper-list-hint" class="paper-hint">Select a portfolio to manage holdings and run simulations, or add a new one.</p>
+            <div id="paper-portfolios-grid" class="paper-portfolios-grid"></div>
           </div>
-          <div id="paper-detail-wrap" hidden>
-            <h3 id="paper-detail-title"></h3>
-            <p id="paper-detail-meta"></p>
-            <div class="form-inline">
-              <input type="text" id="paper-add-symbol" placeholder="Symbol e.g. RELIANCE">
-              <button type="button" class="btn btn-secondary" id="btn-paper-add-position">Add stock</button>
+          <div id="paper-detail-wrap" class="paper-detail-wrap" hidden>
+            <button type="button" class="paper-close-detail" id="paper-close-detail" aria-label="Back to list">← Back to list</button>
+            <div class="paper-detail-header">
+              <div class="paper-detail-info">
+                <h3 id="paper-detail-title" class="paper-detail-title"></h3>
+                <p id="paper-detail-meta" class="paper-detail-meta"></p>
+              </div>
+              <div class="paper-detail-actions">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-paper-edit-portfolio">Edit</button>
+                <button type="button" class="btn btn-secondary btn-sm btn-danger" id="btn-paper-delete-portfolio">Remove</button>
+              </div>
             </div>
-            <div class="table-container">
-              <table class="data-table" id="paper-positions-table">
-                <thead><tr><th>Symbol</th><th>Strategies</th><th></th></tr></thead>
-                <tbody id="paper-positions-tbody"></tbody>
-              </table>
+            <div class="paper-holdings-section">
+              <h4 class="paper-section-title">Holdings</h4>
+              <div class="paper-add-stock-row">
+                <div class="input-group paper-add-symbol-group">
+                  <label for="paper-add-symbol" class="sr-only">Add stock</label>
+                  <div class="combobox-wrap">
+                    <input type="text" id="paper-add-symbol" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="paper-symbol-listbox" role="combobox">
+                    <button type="button" class="combobox-trigger" id="paper-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+                    <ul id="paper-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-secondary" id="btn-paper-add-position">Add stock</button>
+              </div>
+              <div class="table-container paper-positions-container">
+                <table class="data-table" id="paper-positions-table">
+                  <thead><tr><th>Symbol</th><th>Strategies</th><th class="col-actions"></th></tr></thead>
+                  <tbody id="paper-positions-tbody"></tbody>
+                </table>
+              </div>
             </div>
-            <button type="button" class="btn btn-primary" id="btn-paper-run">Run simulation</button>
-            <div id="paper-snapshots" class="paper-snapshots"></div>
+            <div class="paper-sim-section">
+              <button type="button" class="btn btn-primary" id="btn-paper-run">Run simulation</button>
+              <div id="paper-snapshots" class="paper-snapshots"></div>
+            </div>
           </div>
         </div>
       </section>
@@ -281,7 +347,14 @@
       <div class="modal-content">
         <h3>Add stock</h3>
         <p class="modal-hint">Add a stock not in Nifty 50. Fetches last 10 years of data so it appears everywhere (Analysis, Dashboard, Backtest, Paper).</p>
-        <div class="input-group"><label for="add-stock-symbol">Symbol</label><input type="text" id="add-stock-symbol" placeholder="e.g. TCS, INFY" required></div>
+        <div class="input-group">
+          <label for="add-stock-symbol">Symbol</label>
+          <div class="combobox-wrap">
+            <input type="text" id="add-stock-symbol" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="add-stock-symbol-listbox" role="combobox" required>
+            <button type="button" class="combobox-trigger" id="add-stock-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+            <ul id="add-stock-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+          </div>
+        </div>
         <div class="input-group"><label for="add-stock-company">Company name (optional)</label><input type="text" id="add-stock-company" placeholder="Optional"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-primary" id="btn-add-stock-submit">Add and fetch data</button>
@@ -293,7 +366,14 @@
       <div class="modal-content">
         <h3>Edit stock</h3>
         <p class="modal-hint">Change display symbol, Yahoo symbol, or company name. If you change the symbol or Yahoo symbol, price data will be refetched for the new symbol.</p>
-        <div class="input-group"><label for="edit-stock-symbol">Symbol</label><input type="text" id="edit-stock-symbol" placeholder="e.g. RELIANCE" required></div>
+        <div class="input-group">
+          <label for="edit-stock-symbol">Symbol</label>
+          <div class="combobox-wrap">
+            <input type="text" id="edit-stock-symbol" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="edit-stock-symbol-listbox" role="combobox" required>
+            <button type="button" class="combobox-trigger" id="edit-stock-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+            <ul id="edit-stock-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+          </div>
+        </div>
         <div class="input-group"><label for="edit-stock-yahoo">Yahoo symbol (optional)</label><input type="text" id="edit-stock-yahoo" placeholder="e.g. RELIANCE.NS or RELIANCE.BO"></div>
         <div class="input-group"><label for="edit-stock-company">Company name (optional)</label><input type="text" id="edit-stock-company" placeholder="Optional"></div>
         <div class="modal-actions">
@@ -313,6 +393,31 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-primary" id="btn-add-strategy-submit">Add</button>
           <button type="button" class="btn btn-secondary" id="btn-add-strategy-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="paper-add-portfolio-modal" class="modal" role="dialog" aria-label="Add portfolio" hidden>
+      <div class="modal-content">
+        <h3>Add portfolio</h3>
+        <p class="modal-hint">Create a new paper portfolio with a name and starting capital.</p>
+        <div class="input-group"><label for="paper-add-portfolio-name">Name</label><input type="text" id="paper-add-portfolio-name" placeholder="e.g. My Paper Portfolio" required></div>
+        <div class="input-group"><label for="paper-add-portfolio-capital">Initial capital</label><input type="number" id="paper-add-portfolio-capital" placeholder="1000000" min="1" step="1000" value="1000000"></div>
+        <div class="input-group"><label for="paper-add-portfolio-currency">Currency</label><input type="text" id="paper-add-portfolio-currency" placeholder="INR" value="INR"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-paper-add-portfolio-submit">Add</button>
+          <button type="button" class="btn btn-secondary" id="btn-paper-add-portfolio-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div id="paper-edit-portfolio-modal" class="modal" role="dialog" aria-label="Edit portfolio" hidden data-portfolio-id="">
+      <div class="modal-content">
+        <h3>Edit portfolio</h3>
+        <p class="modal-hint">Change name or initial capital. Existing snapshots are not modified.</p>
+        <div class="input-group"><label for="paper-edit-portfolio-name">Name</label><input type="text" id="paper-edit-portfolio-name" placeholder="Portfolio name" required></div>
+        <div class="input-group"><label for="paper-edit-portfolio-capital">Initial capital</label><input type="number" id="paper-edit-portfolio-capital" placeholder="1000000" min="1" step="1000"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="btn-paper-edit-portfolio-submit">Save</button>
+          <button type="button" class="btn btn-secondary" id="btn-paper-edit-portfolio-cancel">Cancel</button>
         </div>
       </div>
     </div>

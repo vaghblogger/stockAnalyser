@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS paper_equity_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_paper_positions_portfolio ON paper_portfolio_positions(portfolio_id);
 CREATE INDEX IF NOT EXISTS idx_paper_snapshots_portfolio_date ON paper_equity_snapshots(portfolio_id, date);
+
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id TEXT PRIMARY KEY,
+    strategy_id TEXT,
+    strategy_name TEXT NOT NULL,
+    strategy_description TEXT,
+    symbols TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    params TEXT NOT NULL,
+    metrics TEXT NOT NULL,
+    rows TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+);
+CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at ON backtest_runs(created_at DESC);
 """
 
 
@@ -380,6 +396,173 @@ def delete_strategy(cache_dir: str, strategy_id: str) -> bool:
         conn.close()
 
 
+# --- Backtest runs (history) ---
+
+
+def save_backtest_run(
+    cache_dir: str,
+    *,
+    strategy_id: Optional[str] = None,
+    strategy_name: str,
+    strategy_description: str = "",
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    params: dict,
+    metrics: dict,
+    rows: list[dict],
+    run_id: Optional[str] = None,
+) -> dict:
+    """Persist a backtest run. Returns the saved run with id."""
+    now = _now()
+    rid = run_id or str(uuid4())
+    conn = _conn(cache_dir)
+    try:
+        conn.execute(
+            """INSERT INTO backtest_runs (
+                id, strategy_id, strategy_name, strategy_description,
+                symbols, start_date, end_date, params, metrics, rows, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                rid,
+                strategy_id,
+                strategy_name or "Rule-based",
+                strategy_description or "",
+                json.dumps(symbols),
+                start_date,
+                end_date,
+                json.dumps(params),
+                json.dumps(metrics),
+                json.dumps(rows),
+                now,
+            ),
+        )
+        conn.commit()
+        return {
+            "id": rid,
+            "strategy_id": strategy_id,
+            "strategy_name": strategy_name,
+            "strategy_description": strategy_description,
+            "symbols": symbols,
+            "start_date": start_date,
+            "end_date": end_date,
+            "params": params,
+            "metrics": metrics,
+            "rows": rows,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def list_backtest_runs(
+    cache_dir: str,
+    limit: int = 50,
+    offset: int = 0,
+    symbol: Optional[str] = None,
+    strategy_id: Optional[str] = None,
+) -> list[dict]:
+    """List backtest runs, newest first. Optional filter by symbol (in symbols list) or strategy_id."""
+    conn = _conn(cache_dir)
+    try:
+        if symbol or strategy_id:
+            conditions = []
+            args: list[Any] = []
+            if strategy_id:
+                conditions.append("strategy_id = ?")
+                args.append(strategy_id)
+            if symbol:
+                conditions.append("symbols LIKE ?")
+                args.append("%" + json.dumps(symbol) + "%")
+            where = " AND ".join(conditions) if conditions else "1=1"
+            args.extend([limit, offset])
+            cur = conn.execute(
+                f"""SELECT id, strategy_id, strategy_name, symbols, start_date, end_date, params, metrics, created_at
+                    FROM backtest_runs WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                args,
+            )
+        else:
+            cur = conn.execute(
+                """SELECT id, strategy_id, strategy_name, symbols, start_date, end_date, params, metrics, created_at
+                   FROM backtest_runs ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+        out = []
+        for r in cur.fetchall():
+            try:
+                symbols_list = json.loads(r[3]) if isinstance(r[3], str) else r[3]
+                params_obj = json.loads(r[6]) if isinstance(r[6], str) else r[6]
+                metrics_obj = json.loads(r[7]) if isinstance(r[7], str) else r[7]
+            except (json.JSONDecodeError, TypeError):
+                symbols_list = []
+                params_obj = {}
+                metrics_obj = {}
+            portfolio = (metrics_obj or {}).get("portfolio") or {}
+            out.append({
+                "id": r[0],
+                "strategy_id": r[1],
+                "strategy_name": r[2],
+                "symbols": symbols_list,
+                "start_date": r[4],
+                "end_date": r[5],
+                "params": params_obj,
+                "metrics": metrics_obj,
+                "portfolio": portfolio,
+                "created_at": r[8],
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def get_backtest_run(cache_dir: str, run_id: str) -> Optional[dict]:
+    """Get a single backtest run by id, with full rows."""
+    conn = _conn(cache_dir)
+    try:
+        cur = conn.execute(
+            """SELECT id, strategy_id, strategy_name, strategy_description, symbols, start_date, end_date,
+                      params, metrics, rows, created_at FROM backtest_runs WHERE id = ?""",
+            (run_id,),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        symbols_list = json.loads(r[4]) if isinstance(r[4], str) else r[4]
+        params_obj = json.loads(r[7]) if isinstance(r[7], str) else r[7]
+        metrics_obj = json.loads(r[8]) if isinstance(r[8], str) else r[8]
+        rows_list = json.loads(r[9]) if isinstance(r[9], str) else r[9]
+        return {
+            "id": r[0],
+            "strategy_id": r[1],
+            "strategy_name": r[2],
+            "strategy_description": r[3],
+            "symbols": symbols_list,
+            "start_date": r[5],
+            "end_date": r[6],
+            "params": params_obj,
+            "metrics": metrics_obj,
+            "rows": rows_list,
+            "created_at": r[10],
+            "strategy": {
+                "name": r[2],
+                "description": r[3] or "",
+            },
+        }
+    finally:
+        conn.close()
+
+
+def delete_backtest_run(cache_dir: str, run_id: str) -> bool:
+    """Delete a backtest run by id."""
+    conn = _conn(cache_dir)
+    try:
+        cur = conn.execute("DELETE FROM backtest_runs WHERE id = ?", (run_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 # --- Symbol universe ---
 
 
@@ -426,6 +609,25 @@ def get_universe_symbol(cache_dir: str, symbol: str) -> Optional[dict]:
         return {"symbol": r[0], "yahoo_symbol": r[1], "company_name": r[2], "added_at": r[3]}
     finally:
         conn.close()
+
+
+def get_universe_symbol_by_any(cache_dir: str, symbol: str) -> Optional[dict]:
+    """Find a universe row by symbol (primary key), yahoo_symbol, or base part of yahoo_symbol."""
+    key = (symbol or "").strip().upper()
+    if not key:
+        return None
+    s = get_universe_symbol(cache_dir, key)
+    if s:
+        return s
+    if not key.endswith((".NS", ".BO")):
+        s = get_universe_symbol(cache_dir, key + ".NS") or get_universe_symbol(cache_dir, key + ".BO")
+        if s:
+            return s
+    for row in list_universe_symbols(cache_dir):
+        base = ((row.get("yahoo_symbol") or row.get("symbol") or "").split(".")[0] or "").strip().upper()
+        if base == key or (row.get("symbol") or "").strip().upper() == key or (row.get("yahoo_symbol") or "").strip() == symbol.strip():
+            return row
+    return None
 
 
 def update_universe_symbol(

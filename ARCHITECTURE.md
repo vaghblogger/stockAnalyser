@@ -50,7 +50,7 @@ flowchart TB
 - **n8n** orchestrates multi-step workflows by calling the same API (e.g. OHLCV → Enrich + Sentiment → Merge → Signal).
 - **API** uses config-driven **data**, **analysis**, **sentiment**, and **backtest** services; data is cached in SQLite.
 - **Data refresh** is handled by the app’s **scheduler** (APScheduler), not n8n: at a configurable interval, OHLCV for all universe symbols is refreshed and written to the cache.
-- **App DB** (`data/app.db`) stores dashboard views, strategies, symbol universe, and paper portfolios/snapshots.
+- **App DB** (`data/app.db`) stores dashboard views, strategies, symbol universe, paper portfolios/snapshots, and backtest run history.
 
 ---
 
@@ -269,6 +269,10 @@ flowchart TB
     Rows --> Metrics
 ```
 
+Strategy logic: if a strategy’s `params` include `buy_rule` and/or `sell_rule`, the **rule engine** (`src/analysis/rule_engine.py`) evaluates them; otherwise the built-in RSI/MACD/SMA rules are used. Rules use indicator names, flags, and operators (`<`, `<=`, `>`, `>=`, `==`, `!=`, `and`, `or`, `not`) in a TradingView Pine–style format. See **docs/BACKTEST_RULES.md** and **GET /backtest/rule-schema** for the full schema.
+
+**Backtest history**: Every `POST /backtest` run is persisted in `backtest_runs` (app.db). **GET /backtest/history** lists runs (optional `limit`, `offset`, `symbol`, `strategy_id`); **GET /backtest/history/{run_id}** returns a full run (same shape as POST response) so the UI can display it. The Backtest tab includes a History section to list and view past runs.
+
 ---
 
 ## Project layout
@@ -322,7 +326,7 @@ flowchart LR
 | `config/config.yaml` | Providers, indicators, backtest defaults, API port |
 | `config/symbols.csv` | symbol → yahoo_symbol, company_name |
 | `data/cache/ohlcv.db` | SQLite OHLCV cache |
-| `data/app.db` | App DB: dashboard views, strategies, universe, paper portfolios |
+| `data/app.db` | App DB: dashboard views, strategies, universe, paper portfolios, backtest runs |
 | `config/nifty50.csv` | Nifty 50 symbol list (default universe) |
 | `static/` | Web app (index.html, app.js, styles.css) |
 | `n8n/workflows/` | n8n workflow JSONs (analysis, backtest) |
