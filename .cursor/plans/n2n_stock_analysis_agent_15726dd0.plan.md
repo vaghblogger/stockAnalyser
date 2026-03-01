@@ -13,16 +13,16 @@ todos:
     status: completed
   - id: python-api
     content: Implement Python FastAPI service with /ohlcv, /enrich, /sentiment, /metrics, /backtest
-    status: in_progress
+    status: completed
   - id: n8n-workflows
     content: Build n8n workflows for analysis and backtest (HTTP, Code, OpenAI, Merge, Loop)
-    status: pending
+    status: completed
   - id: cli-cache
     content: Add CLI and cache; optional local runner that calls Python API or n8n webhook
-    status: pending
+    status: completed
   - id: backtest-agent
     content: Implement backtesting agent (rolling dates, forward returns, metrics)
-    status: pending
+    status: completed
 isProject: false
 ---
 

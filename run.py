@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from datetime import date, timedelta
+from typing import Optional
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
@@ -20,7 +21,7 @@ def get_api_base() -> str:
     return os.environ.get("API_BASE", "http://localhost:8000")
 
 
-def http_get(path: str, params: dict | None = None) -> dict:
+def http_get(path: str, params: Optional[dict] = None) -> dict:
     url = get_api_base().rstrip("/") + path
     if params:
         url += "?" + urlencode(params)
@@ -42,7 +43,6 @@ def http_get(path: str, params: dict | None = None) -> dict:
 
 
 def http_post(path: str, data: dict) -> dict:
-    import urllib.request
     url = get_api_base().rstrip("/") + path
     body = json.dumps(data).encode()
     req = Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})

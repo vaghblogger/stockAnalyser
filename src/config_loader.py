@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Union
 
 import yaml
 from pydantic import ValidationError
@@ -30,7 +30,7 @@ def _env_override(key: str, default: Any = None) -> Any:
     return v
 
 
-def load_config(config_path: str | Path | None = None) -> AppConfig:
+def load_config(config_path: Optional[Union[str, Path]] = None) -> AppConfig:
     """Load YAML config, apply env overrides, validate with Pydantic."""
     if config_path is None:
         base = Path(__file__).resolve().parent.parent
@@ -62,7 +62,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     return cfg
 
 
-_config: AppConfig | None = None
+_config: Optional[AppConfig] = None
 
 
 def get_config(reload: bool = False) -> AppConfig:

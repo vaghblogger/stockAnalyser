@@ -7,8 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config_loader import load_config
+from src.data.cache import init_cache_db
 from src.data.providers import get_data_provider
-from src.data.symbols import resolve_symbol
 from src.sentiment.providers import get_sentiment_provider
 
 # Import routes to register
@@ -22,6 +22,7 @@ import src.sentiment.providers  # noqa: F401
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_config()
+    init_cache_db(cfg.cache_dir)
     app.state.config = cfg
     app.state.data_provider = get_data_provider(
         cfg.providers.data_provider,
