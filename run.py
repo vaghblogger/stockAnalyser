@@ -3,6 +3,8 @@
 CLI for Stock Analysis Agent.
   python run.py analyze --symbol RELIANCE [--days 90]
   python run.py backtest --symbol RELIANCE --start 2023-01-01 --end 2024-06-01 [--lookback 90] [--hold-days 5] [--step-days 5]
+  python run.py analyze-graph --symbol RELIANCE [--days 90]   # LangGraph analysis workflow
+  python run.py backtest-graph --symbol RELIANCE --start ... --end ... [options]  # LangGraph backtest
 Calls the Python API (assumes API is running on API_BASE or localhost:8000).
 """
 
@@ -111,6 +113,48 @@ def cmd_backtest(
     print(f"Total evaluation dates: {len(rows)}")
 
 
+def cmd_analyze_graph(symbol: str, days: int) -> None:
+    """Run analysis via LangGraph (POST /api/graph/analyze)."""
+    print(f"Running analysis graph for {symbol} (days={days})...")
+    resp = http_post("/api/graph/analyze", {"symbol": symbol, "days": days})
+    print("Signal:", resp.get("signal", "HOLD"))
+    print("Reason:", resp.get("reason", ""))
+    if resp.get("enrich_result"):
+        print("Indicators (sample):", json.dumps(resp["enrich_result"].get("indicators", {}) or {}, indent=2)[:500])
+    if resp.get("sentiment_result"):
+        print("Sentiment:", resp["sentiment_result"].get("label"), resp["sentiment_result"].get("score"))
+
+
+def cmd_backtest_graph(
+    symbol: str,
+    start: str,
+    end: str,
+    lookback: int,
+    hold_days: int,
+    step_days: int,
+    strategy_id: Optional[str] = None,
+) -> None:
+    """Run backtest via LangGraph (POST /api/graph/backtest)."""
+    print(f"Backtest graph {symbol} from {start} to {end}...")
+    body = {
+        "symbol": symbol,
+        "start": start,
+        "end": end,
+        "lookback_days": lookback,
+        "hold_days": hold_days,
+        "step_days": step_days,
+    }
+    if strategy_id:
+        body["strategy_id"] = strategy_id
+    resp = http_post("/api/graph/backtest", body)
+    metrics = resp.get("metrics", {})
+    print("Metrics:", json.dumps(metrics, indent=2))
+    rows = resp.get("rows", [])
+    print(f"Total evaluation dates: {len(rows)}")
+    if resp.get("run_id"):
+        print("Run ID:", resp["run_id"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stock Analysis Agent CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -126,11 +170,32 @@ def main() -> None:
     p_bt.add_argument("--lookback", type=int, default=90)
     p_bt.add_argument("--hold-days", type=int, default=5)
     p_bt.add_argument("--step-days", type=int, default=5)
+    # analyze-graph (LangGraph)
+    p_ag = sub.add_parser("analyze-graph", help="Run analysis via LangGraph (POST /api/graph/analyze)")
+    p_ag.add_argument("--symbol", "-s", required=True)
+    p_ag.add_argument("--days", "-d", type=int, default=90)
+    # backtest-graph (LangGraph)
+    p_bg = sub.add_parser("backtest-graph", help="Run backtest via LangGraph (POST /api/graph/backtest)")
+    p_bg.add_argument("--symbol", "-s", required=True)
+    p_bg.add_argument("--start", required=True, help="Start date YYYY-MM-DD")
+    p_bg.add_argument("--end", required=True, help="End date YYYY-MM-DD")
+    p_bg.add_argument("--lookback", type=int, default=90)
+    p_bg.add_argument("--hold-days", type=int, default=5)
+    p_bg.add_argument("--step-days", type=int, default=5)
+    p_bg.add_argument("--strategy-id", type=str, default=None, help="Optional strategy ID")
     args = parser.parse_args()
     if args.command == "analyze":
         cmd_analyze(args.symbol, args.days)
     elif args.command == "backtest":
         cmd_backtest(args.symbol, args.start, args.end, args.lookback, args.hold_days, args.step_days)
+    elif args.command == "analyze-graph":
+        cmd_analyze_graph(args.symbol, args.days)
+    elif args.command == "backtest-graph":
+        cmd_backtest_graph(
+            args.symbol, args.start, args.end,
+            args.lookback, args.hold_days, args.step_days,
+            strategy_id=args.strategy_id,
+        )
     else:
         parser.print_help()
         sys.exit(1)

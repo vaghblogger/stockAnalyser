@@ -37,21 +37,28 @@ _DEFAULT_RULE_FLAGS = ["rsi_oversold", "rsi_overbought", "macd_bullish", "macd_b
 _DEFAULT_RULE_OPERATORS = ["<", "<=", ">", ">=", "==", "!="]
 
 
-@router.get("/backtest/rule-schema")
+@router.get("/api/backtest/rule-schema")
 def get_backtest_rule_schema() -> dict:
     """Return available indicator keys, flags, and operators from config (or built-in defaults)."""
     config = get_config()
     schema = getattr(config.backtest, "rule_schema", None) if config.backtest else None
+    indicators = _DEFAULT_RULE_INDICATORS
+    flags = _DEFAULT_RULE_FLAGS
+    operators = _DEFAULT_RULE_OPERATORS
     if schema and isinstance(schema, dict):
-        indicators = schema.get("indicators")
-        flags = schema.get("flags")
-        operators = schema.get("operators")
-    else:
-        indicators = flags = operators = None
+        ind = schema.get("indicators")
+        if isinstance(ind, list) and len(ind) > 0:
+            indicators = [str(x) for x in ind]
+        fl = schema.get("flags")
+        if isinstance(fl, list) and len(fl) > 0:
+            flags = [str(x) for x in fl]
+        op = schema.get("operators")
+        if isinstance(op, list) and len(op) > 0:
+            operators = [str(x) for x in op]
     return {
-        "indicators": indicators if isinstance(indicators, list) else _DEFAULT_RULE_INDICATORS,
-        "flags": flags if isinstance(flags, list) else _DEFAULT_RULE_FLAGS,
-        "operators": operators if isinstance(operators, list) else _DEFAULT_RULE_OPERATORS,
+        "indicators": indicators,
+        "flags": flags,
+        "operators": operators,
         "docs": "See docs/BACKTEST_RULES.md for rule format (and/or/not, indicator vs value, indicator vs indicator, flag).",
     }
 
@@ -150,19 +157,22 @@ def _resolve_strategy_params(cache_dir: str, strategy_id: Optional[str], assignm
     return params, info
 
 
-@router.post("/backtest")
-def post_backtest(request: Request, body: BacktestRequest) -> dict:
-    """Run backtest: single or multi-symbol; optional strategy per symbol."""
-    config = get_config()
+def run_backtest_core(
+    *,
+    config: Any,
+    cache_dir: str,
+    data_provider: Any,
+    sentiment_provider: Any,
+    body: BacktestRequest,
+) -> dict:
+    """Core backtest logic (used by POST /api/backtest and LangGraph backtest node)."""
     start_date = date.fromisoformat(body.start)
     end_date = date.fromisoformat(body.end)
     lookback_days = body.lookback_days or config.backtest.default_lookback_days
     hold_days = body.hold_days or config.backtest.default_hold_days
     step_days = body.step_days or config.backtest.default_step_days
     max_dates = config.max_backtest_dates
-    provider = request.app.state.data_provider
-    cache_dir = config.cache_dir
-
+    provider = data_provider
     symbols = body.symbols if body.symbols else ([body.symbol] if body.symbol else ["RELIANCE"])
     assignments = body.strategy_assignments or {}
 
@@ -177,7 +187,7 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
         strategy_info = info
 
         def run_analysis(sym: str, s: date, e: date, params: dict = strategy_params):
-            return _run_analysis_for_date(sym, s, e, provider, cache_dir, config, request.app.state.sentiment_provider, strategy_params=params)
+            return _run_analysis_for_date(sym, s, e, provider, cache_dir, config, sentiment_provider, strategy_params=params)
 
         def get_forward_return(s: str, from_date: date, hold: int) -> Optional[float]:
             suffix = ".BO" if config.default_exchange == "BSE" else ".NS"
@@ -227,6 +237,28 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
     metrics = compute_metrics(all_rows, signal_key="signal", return_key="forward_return", action_key="action")
     result = {"metrics": metrics, "rows": all_rows, "strategy": strategy_info, "by_symbol": by_symbol}
 
+    def _sanitize_json(obj: Any) -> Any:
+        """Replace nan/inf and convert numpy-like scalars so JSON serialization does not fail."""
+        if isinstance(obj, dict):
+            return {k: _sanitize_json(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize_json(v) for v in obj]
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        if isinstance(obj, (int, bool)) or obj is None:
+            return obj
+        try:
+            if hasattr(obj, "__float__") and not isinstance(obj, bool):
+                f = float(obj)
+                if math.isnan(f) or math.isinf(f):
+                    return None
+                return f
+        except (TypeError, ValueError):
+            pass
+        return obj
+
     run_params = {
         "lookback_days": lookback_days,
         "hold_days": hold_days,
@@ -244,27 +276,30 @@ def post_backtest(request: Request, body: BacktestRequest) -> dict:
             start_date=body.start,
             end_date=body.end,
             params=run_params,
-            metrics=metrics,
-            rows=all_rows,
+            metrics=_sanitize_json(metrics),
+            rows=_sanitize_json(all_rows),
         )
         result["run_id"] = saved["id"]
     except Exception:
         result["run_id"] = None
 
-    def _sanitize_json(obj: Any) -> Any:
-        """Replace nan/inf floats with None so JSON serialization does not fail."""
-        if isinstance(obj, dict):
-            return {k: _sanitize_json(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_sanitize_json(v) for v in obj]
-        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-            return None
-        return obj
-
     return _sanitize_json(result)
 
 
-@router.get("/backtest/history")
+@router.post("/api/backtest")
+def post_backtest(request: Request, body: BacktestRequest) -> dict:
+    """Run backtest: single or multi-symbol; optional strategy per symbol."""
+    config = get_config()
+    return run_backtest_core(
+        config=config,
+        cache_dir=config.cache_dir,
+        data_provider=request.app.state.data_provider,
+        sentiment_provider=request.app.state.sentiment_provider,
+        body=body,
+    )
+
+
+@router.get("/api/backtest/runs")
 def get_backtest_history(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -277,7 +312,7 @@ def get_backtest_history(
     return {"runs": runs, "count": len(runs)}
 
 
-@router.get("/backtest/history/{run_id}")
+@router.get("/api/backtest/runs/{run_id}")
 def get_backtest_run_by_id(run_id: str) -> dict:
     """Retrieve a single backtest run by id. Response shape matches POST /backtest for UI compatibility."""
     config = get_config()

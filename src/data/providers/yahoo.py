@@ -11,8 +11,8 @@ import yfinance as yf
 
 from src.data.providers.base import DataProvider
 
-# Single-request range; beyond this we chunk (yfinance often returns only ~1y per call for NSE)
-_CHUNK_DAYS = 300
+# Single-request range; beyond this we chunk (Yahoo often returns only ~1y per call for NSE/BSE)
+_CHUNK_DAYS = 365
 
 
 @contextmanager

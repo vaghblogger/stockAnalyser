@@ -33,6 +33,7 @@
   var dashboardColumnsConfig = null;
   var DASHBOARD_AVAILABLE_COLUMNS = [
     { key: 'stock', label: 'Stock', alwaysShow: true },
+    { key: 'data_duration_days', label: 'Duration', alwaysShow: false },
     { key: 'close', label: 'Close', alwaysShow: false },
     { key: 'sma_20', label: 'SMA 20', alwaysShow: false },
     { key: 'sma_50', label: 'SMA 50', alwaysShow: false },
@@ -46,14 +47,57 @@
   function getDefaultDashboardColumns() {
     return [
       { key: 'stock', visible: true, order: 0 },
-      { key: 'close', visible: true, order: 1 },
-      { key: 'sma_20', visible: true, order: 2 },
-      { key: 'sma_50', visible: true, order: 3 },
-      { key: 'rsi', visible: true, order: 4 },
-      { key: 'macd_hist', visible: true, order: 5 },
-      { key: 'signal', visible: true, order: 6 },
-      { key: 'reason', visible: true, order: 7 },
+      { key: 'data_duration_days', visible: true, order: 1 },
+      { key: 'close', visible: true, order: 2 },
+      { key: 'sma_20', visible: true, order: 3 },
+      { key: 'sma_50', visible: true, order: 4 },
+      { key: 'rsi', visible: true, order: 5 },
+      { key: 'macd_hist', visible: true, order: 6 },
+      { key: 'signal', visible: true, order: 7 },
+      { key: 'reason', visible: true, order: 8 },
     ];
+  }
+  var dashboardRefreshInProgress = false;
+  function formatSymbolList(symbols, maxShow) {
+    if (!Array.isArray(symbols) || symbols.length === 0) return '';
+    maxShow = maxShow != null ? maxShow : 10;
+    var shown = symbols.slice(0, maxShow).filter(Boolean);
+    var rest = symbols.length - shown.length;
+    var text = shown.join(', ');
+    if (rest > 0) text += ' and ' + rest + ' more';
+    return text;
+  }
+  function formatDurationYearsMonths(days) {
+    if (days == null || Number.isNaN(Number(days)) || days < 0) return null;
+    var d = Math.floor(Number(days));
+    var years = Math.floor(d / 365);
+    var remainingDays = d % 365;
+    var months = Math.round(remainingDays / (365 / 12));
+    if (months >= 12) { months = 0; years += 1; }
+    return years + ' yr ' + months + ' m';
+  }
+  function setDurationCellContent(td, durationDays) {
+    if (!td) return;
+    var yrM = formatDurationYearsMonths(durationDays);
+    td.textContent = yrM != null ? yrM : '—';
+    if (yrM != null) td.title = String(Math.floor(Number(durationDays))) + ' days';
+    else td.removeAttribute('title');
+  }
+  function updateDashboardTabRefreshLabel() {
+    var btn = document.querySelector('.tab[data-tab="dashboard"]');
+    if (btn) btn.textContent = dashboardRefreshInProgress ? 'Dashboard (refreshing…)' : 'Dashboard';
+  }
+  function getDashboardLookbackDays() {
+    var valEl = document.getElementById('dashboard-lookback-value');
+    var unitEl = document.getElementById('dashboard-lookback-unit');
+    var value = parseInt(valEl && valEl.value, 10) || 90;
+    var unit = (unitEl && unitEl.value) || 'days';
+    var daysPerMonth = 365 / 12;
+    var daysPerYear = 365;
+    var days = value;
+    if (unit === 'months') days = Math.round(value * daysPerMonth);
+    if (unit === 'years') days = Math.round(value * daysPerYear);
+    return Math.min(Math.max(20, Math.floor(days)), 365 * 15);
   }
   function getDashboardColumnsConfig() {
     if (dashboardColumnsConfig && dashboardColumnsConfig.length) return dashboardColumnsConfig;
@@ -69,7 +113,7 @@
       var th = document.createElement('th');
       var label = c.key === 'stock' ? 'Stock' : (DASHBOARD_AVAILABLE_COLUMNS.find(function (x) { return x.key === c.key; }) || {}).label || c.key;
       th.textContent = label;
-      if (c.key !== 'stock' && c.key !== 'signal' && c.key !== 'reason') th.className = 'num';
+      if (c.key !== 'stock' && c.key !== 'signal' && c.key !== 'reason' && c.key !== 'data_duration_days') th.className = 'num';
       tr.appendChild(th);
     });
     var thActions = document.createElement('th');
@@ -166,6 +210,30 @@
     if (editStockModal) editStockModal.hidden = true;
   }
 
+  var TAB_IDS = ['dashboard', 'analysis', 'backtest', 'paper', 'strategies'];
+  function switchToTab(tabName) {
+    if (!tabName || TAB_IDS.indexOf(tabName) === -1) return;
+    try { sessionStorage.setItem('stockapp_tab', tabName); } catch (e) {}
+    closeAllModals();
+    var tabs = document.querySelectorAll('.tab');
+    for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+    var panels = document.querySelectorAll('.tab-panel');
+    for (var j = 0; j < panels.length; j++) {
+      panels[j].classList.remove('active');
+      panels[j].setAttribute('hidden', '');
+    }
+    var btn = document.querySelector('.tab[data-tab="' + tabName + '"]');
+    if (btn) btn.classList.add('active');
+    var panel = document.getElementById('panel-' + tabName);
+    if (panel) {
+      panel.classList.add('active');
+      panel.removeAttribute('hidden');
+    }
+    if (tabName === 'dashboard') loadDashboard();
+    else if (tabName === 'backtest') loadBacktestStrategies();
+    else if (tabName === 'paper') loadPaperPortfolios();
+    else if (tabName === 'strategies') loadStrategiesTab();
+  }
   function setupTabs() {
     var tabList = document.querySelector('.tabs');
     if (tabList) {
@@ -175,26 +243,7 @@
           if (btn.classList && btn.classList.contains('tab')) {
             ev.preventDefault();
             var tab = btn.getAttribute('data-tab');
-            if (tab) {
-              closeAllModals();
-              var tabs = document.querySelectorAll('.tab');
-              for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
-              var panels = document.querySelectorAll('.tab-panel');
-              for (var j = 0; j < panels.length; j++) {
-                panels[j].classList.remove('active');
-                panels[j].setAttribute('hidden', '');
-              }
-              btn.classList.add('active');
-              var panel = document.getElementById('panel-' + tab);
-              if (panel) {
-                panel.classList.add('active');
-                panel.removeAttribute('hidden');
-              }
-              if (tab === 'dashboard') loadDashboard();
-              else if (tab === 'backtest') loadBacktestStrategies();
-              else if (tab === 'paper') loadPaperPortfolios();
-              else if (tab === 'strategies') loadStrategiesTab();
-            }
+            if (tab) switchToTab(tab);
             return;
           }
           btn = btn.parentNode;
@@ -1090,7 +1139,7 @@
     if (loadingEl) loadingEl.hidden = false;
     listEl.innerHTML = '';
     try {
-      var res = await fetchJson(API_BASE + '/backtest/history?limit=50');
+      var res = await fetchJson(API_BASE + '/backtest/runs?limit=50');
       var runs = res.runs || [];
       if (runs.length === 0) {
         listEl.innerHTML = '<li class="backtest-history-empty">No saved runs yet. Run a backtest to add one.</li>';
@@ -1116,7 +1165,7 @@
             btn.addEventListener('click', function () {
               var id = this.getAttribute('data-run-id');
               if (!id) return;
-              fetchJson(API_BASE + '/backtest/history/' + encodeURIComponent(id)).then(function (data) {
+              fetchJson(API_BASE + '/backtest/runs/' + encodeURIComponent(id)).then(function (data) {
                 renderBacktestResult(data);
               }).catch(function (e) {
                 alert('Failed to load run: ' + (e.message || String(e)));
@@ -1169,19 +1218,21 @@
     }
   }
 
-  async function loadDashboard() {
+  async function loadDashboard(refreshFeedback) {
     const loading = document.getElementById('dashboard-loading');
     const bodyEl = document.getElementById('dashboard-body');
-    const lookback = parseInt(document.getElementById('dashboard-lookback') && document.getElementById('dashboard-lookback').value, 10) || 90;
+    const lookbackVal = getDashboardLookbackDays();
     loading.hidden = false;
     loading.textContent = 'Loading…';
     if (bodyEl) bodyEl.hidden = true;
     await ensureDashboardView();
     buildDashboardHeader(getDashboardColumnsConfig());
     try {
-      const lookbackVal = Math.max(20, Math.min(365, lookback));
       const url = `${API_BASE}/dashboard?lookback_days=${lookbackVal}&_t=${Date.now()}`;
-      const resp = await fetch(url, { cache: 'no-store' });
+      const resp = await fetch(url, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+      });
       if (!resp.ok) throw new Error(resp.statusText || 'Request failed');
       const text = await resp.text();
       let res = {};
@@ -1198,8 +1249,18 @@
       console.log('Dashboard response: count=', res.count, 'stocks.length=', stocks.length, 'first=', stocks[0]);
       const summaryEl = document.getElementById('dashboard-summary');
       if (summaryEl) {
-        var msg = stocks.length + ' stock(s). Click Refresh to update.';
+        var msg = stocks.length + ' stock(s). Click Refresh to fetch latest data from source.';
         if (res.error) msg = res.error + ' — ' + msg;
+        if (refreshFeedback) {
+          if (refreshFeedback.seedError) {
+            msg = 'Refresh failed: ' + refreshFeedback.seedError + '. ' + msg;
+          } else if (refreshFeedback.seedSuccess != null) {
+            msg = 'Data refreshed. ' + refreshFeedback.seedSuccess + ' symbol(s) updated.' + (refreshFeedback.seedFailed > 0 ? ' ' + refreshFeedback.seedFailed + ' failed.' : '') + ' ' + msg;
+            if (refreshFeedback.symbols && refreshFeedback.symbols.length > 0) {
+              msg += ' Symbols: ' + formatSymbolList(refreshFeedback.symbols, 12) + '.';
+            }
+          }
+        }
         summaryEl.textContent = msg;
       }
       const tbody = document.getElementById('dashboard-tbody');
@@ -1219,8 +1280,10 @@
             const sig = (row.signal && row.signal.action) ? row.signal.action : 'HOLD';
             const reason = (row.signal && row.signal.reason) ? row.signal.reason : '—';
             const sigClass = 'signal-badge signal-badge-' + (sig || 'hold').toLowerCase();
+            tr.setAttribute('data-symbol', String(row.symbol || ''));
             visible.forEach(function (col) {
               var td = document.createElement('td');
+              if (col.key === 'data_duration_days' || col.key === 'data_available_from') td.setAttribute('data-column', 'data_duration_days');
               if (col.key === 'stock') {
                 td.innerHTML = '<span class="dashboard-stock-name">' + escapeHtml(String(name)) + '</span><span class="dashboard-stock-symbol">' + escapeHtml(String(row.symbol || '')) + '</span>';
               } else if (col.key === 'close') { td.className = 'num'; td.textContent = fmt(ind.close, 2);
@@ -1232,6 +1295,7 @@
               } else if (col.key === 'atr') { td.className = 'num'; td.textContent = fmt(ind.atr, 2);
               } else if (col.key === 'signal') { td.innerHTML = '<span class="' + sigClass + '">' + escapeHtml(sig) + '</span>';
               } else if (col.key === 'reason') { td.className = 'dashboard-reason'; td.textContent = reason;
+              } else if (col.key === 'data_duration_days' || col.key === 'data_available_from') { td.className = 'num'; var rawDays = row.data_duration_days; var days = (rawDays !== undefined && rawDays !== null && rawDays !== '') ? Number(rawDays) : NaN; setDurationCellContent(td, days);
               } else { td.textContent = fmt(ind[col.key], 2);
               }
               tr.appendChild(td);
@@ -1241,7 +1305,7 @@
             var companyName = (row.company_name || '').trim();
             var tdActions = document.createElement('td');
             tdActions.className = 'dashboard-actions-col';
-            tdActions.innerHTML = '<button type="button" class="btn btn-secondary btn-sm btn-edit-stock" data-symbol="' + escapeHtml(baseSymbol) + '" data-yahoo="' + escapeHtml(yahooSymbol) + '" data-company="' + escapeHtml(companyName) + '" title="Edit symbol, Yahoo symbol, or company name">Edit</button> <button type="button" class="btn btn-secondary btn-sm btn-remove-stock" data-symbol="' + escapeHtml(baseSymbol) + '" title="Remove from universe (removes from dashboard and symbol dropdown)">Remove</button>';
+            tdActions.innerHTML = '<button type="button" class="btn btn-primary btn-sm btn-dashboard-analyse" data-symbol="' + escapeHtml(baseSymbol) + '" title="Open Analysis tab with this stock">Analyse</button> <button type="button" class="btn btn-secondary btn-sm btn-remove-stock" data-symbol="' + escapeHtml(baseSymbol) + '" title="Remove from universe (removes from dashboard and symbol dropdown)">Remove</button>';
             tr.appendChild(tdActions);
             tbody.appendChild(tr);
           } catch (rowErr) {
@@ -1284,7 +1348,7 @@
     listEl.innerHTML = '';
     DASHBOARD_AVAILABLE_COLUMNS.filter(function (c) { return !c.alwaysShow; }).forEach(function (av, idx) {
       var entry = cols.find(function (x) { return x.key === av.key; });
-      var visible = entry ? entry.visible : (av.key === 'close' || av.key === 'sma_20' || av.key === 'sma_50' || av.key === 'rsi' || av.key === 'macd_hist' || av.key === 'signal' || av.key === 'reason');
+      var visible = entry ? entry.visible : (av.key === 'data_duration_days' || av.key === 'close' || av.key === 'sma_20' || av.key === 'sma_50' || av.key === 'rsi' || av.key === 'macd_hist' || av.key === 'signal' || av.key === 'reason');
       var order = entry ? entry.order : idx;
       var div = document.createElement('div');
       div.className = 'column-picker-row';
@@ -1335,6 +1399,27 @@
     loadDashboard();
   }
   setupTabs();
+
+  function switchToAnalysisTabWithSymbol(symbol) {
+    var tabBtn = document.querySelector('.tab[data-tab="analysis"]');
+    if (tabBtn) {
+      var tabs = document.querySelectorAll('.tab');
+      for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+      var panels = document.querySelectorAll('.tab-panel');
+      for (var j = 0; j < panels.length; j++) {
+        panels[j].classList.remove('active');
+        panels[j].setAttribute('hidden', '');
+      }
+      tabBtn.classList.add('active');
+      var panel = document.getElementById('panel-analysis');
+      if (panel) {
+        panel.classList.add('active');
+        panel.removeAttribute('hidden');
+      }
+      var symInput = document.getElementById('analysis-symbol-input');
+      if (symInput && symbol) symInput.value = symbol;
+    }
+  }
 
   var btnRunAnalysis = document.getElementById('btn-run-analysis');
   if (btnRunAnalysis) btnRunAnalysis.addEventListener('click', runAnalysis);
@@ -1770,7 +1855,9 @@
     paperSelectedPortfolioId = id;
     var wrap = document.getElementById('paper-detail-wrap');
     var grid = document.getElementById('paper-portfolios-grid');
+    var body = document.getElementById('paper-body');
     if (wrap) wrap.hidden = !id;
+    if (body) body.classList.toggle('has-detail', !!id);
     if (!id) paperCurrentPortfolio = null;
     if (grid) {
       [].forEach.call(grid.querySelectorAll('.paper-portfolio-card'), function (el) {
@@ -1840,9 +1927,7 @@
     try {
       await fetchJson(API_BASE + '/api/paper/portfolios/' + encodeURIComponent(id), { method: 'DELETE' });
       if (paperSelectedPortfolioId === id) {
-        paperSelectedPortfolioId = null;
-        var wrap = document.getElementById('paper-detail-wrap');
-        if (wrap) wrap.hidden = true;
+        selectPaperPortfolio(null);
       }
       loadPaperPortfolios();
     } catch (e) {
@@ -1999,26 +2084,95 @@
   }
   var btnSaveStrategyCancel = document.getElementById('btn-save-strategy-cancel');
   if (btnSaveStrategyCancel) btnSaveStrategyCancel.addEventListener('click', function () { var m = document.getElementById('save-strategy-modal'); if (m) m.hidden = true; });
+  function findDashboardRowBySymbol(yahooSymbol) {
+    var tbody = document.getElementById('dashboard-tbody');
+    if (!tbody) return null;
+    var rows = tbody.querySelectorAll('tr[data-symbol]');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-symbol') === yahooSymbol) return rows[i];
+    }
+    return null;
+  }
+  function setDashboardRowRefreshing(yahooSymbol, refreshing) {
+    var tr = findDashboardRowBySymbol(yahooSymbol);
+    if (!tr) return;
+    var td = tr.querySelector('td[data-column="data_duration_days"]');
+    if (!td) return;
+    if (refreshing) {
+      tr.classList.add('dashboard-row-refreshing');
+      td.innerHTML = '<span class="refreshing-spinner" aria-hidden="true">⟳</span>';
+    } else {
+      tr.classList.remove('dashboard-row-refreshing');
+      var days = tr.getAttribute('data-duration-days');
+      setDurationCellContent(td, days);
+      tr.removeAttribute('data-duration-days');
+    }
+  }
+  function updateDashboardRowDuration(yahooSymbol, durationDays) {
+    var tr = findDashboardRowBySymbol(yahooSymbol);
+    if (!tr) return;
+    var td = tr.querySelector('td[data-column="data_duration_days"]');
+    if (!td) return;
+    tr.classList.remove('dashboard-row-refreshing');
+    if (durationDays != null && durationDays !== '') {
+      tr.setAttribute('data-duration-days', String(durationDays));
+    }
+    setDurationCellContent(td, durationDays);
+  }
   var btnDashboardRefresh = document.getElementById('btn-dashboard-refresh');
-  if (btnDashboardRefresh) btnDashboardRefresh.addEventListener('click', loadDashboard);
+  if (btnDashboardRefresh) btnDashboardRefresh.addEventListener('click', async function () {
+    var loading = document.getElementById('dashboard-loading');
+    var summaryEl = document.getElementById('dashboard-summary');
+    dashboardRefreshInProgress = true;
+    updateDashboardTabRefreshLabel();
+    if (loading) { loading.hidden = false; loading.textContent = 'Preparing refresh (one symbol at a time)…'; }
+    var tbody = document.getElementById('dashboard-tbody');
+    if (!tbody || !tbody.querySelector('tr[data-symbol]')) await loadDashboard();
+    var lookbackDays = getDashboardLookbackDays();
+    var universeRes = await fetchJson(API_BASE + '/api/data/universe');
+    var symbols = (universeRes && universeRes.symbols) ? universeRes.symbols : [];
+    var toRefresh = Array.isArray(symbols) ? symbols : [];
+    var seedSuccess = 0;
+    var seedFailed = 0;
+    var seedError = null;
+    try {
+      for (var i = 0; i < toRefresh.length; i++) {
+        var s = toRefresh[i];
+        var yahooSym = (s && s.yahoo_symbol) ? s.yahoo_symbol : (typeof s === 'string' ? s : (s && s.symbol) || '');
+        var baseSym = (s && s.symbol) ? s.symbol : (typeof s === 'string' ? s.split('.')[0] : '');
+        if (!yahooSym && baseSym) yahooSym = baseSym;
+        if (!yahooSym) continue;
+        if (loading) loading.textContent = 'Refreshing ' + (i + 1) + '/' + toRefresh.length + ': ' + (baseSym || yahooSym) + '…';
+        setDashboardRowRefreshing(yahooSym, true);
+        try {
+          var res = await fetchJson(API_BASE + '/api/data/refresh-symbol', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol: baseSym || yahooSym, lookback_days: lookbackDays }),
+          });
+          if (res && res.ok !== false && res.success) seedSuccess++; else seedFailed++;
+          var days = (res && res.data_duration_days != null) ? res.data_duration_days : null;
+          updateDashboardRowDuration(yahooSym, days);
+        } catch (e) {
+          seedFailed++;
+          seedError = e.message || String(e);
+          updateDashboardRowDuration(yahooSym, null);
+          setDashboardRowRefreshing(yahooSym, false);
+        }
+      }
+    } finally {
+      dashboardRefreshInProgress = false;
+      updateDashboardTabRefreshLabel();
+    }
+    if (loading) loading.textContent = 'Loading dashboard…';
+    await loadDashboard(seedSuccess > 0 || seedFailed > 0 ? { seedSuccess: seedSuccess, seedFailed: seedFailed, seedError: seedError } : {});
+  });
   var tableDashboard = document.getElementById('table-dashboard');
   if (tableDashboard) {
     tableDashboard.addEventListener('click', async function (ev) {
-      if (ev.target && ev.target.classList && ev.target.classList.contains('btn-edit-stock')) {
+      if (ev.target && ev.target.classList && ev.target.classList.contains('btn-dashboard-analyse')) {
         var sym = ev.target.getAttribute('data-symbol');
-        var yahoo = ev.target.getAttribute('data-yahoo') || '';
-        var company = ev.target.getAttribute('data-company') || '';
-        if (!sym) return;
-        var modal = document.getElementById('edit-stock-modal');
-        if (!modal) return;
-        modal.setAttribute('data-current-symbol', sym);
-        var symInput = document.getElementById('edit-stock-symbol');
-        var yahooInput = document.getElementById('edit-stock-yahoo');
-        var companyInput = document.getElementById('edit-stock-company');
-        if (symInput) symInput.value = sym;
-        if (yahooInput) yahooInput.value = yahoo;
-        if (companyInput) companyInput.value = company;
-        modal.hidden = false;
+        if (sym) switchToAnalysisTabWithSymbol(sym);
       }
       if (ev.target && ev.target.classList && ev.target.classList.contains('btn-remove-stock')) {
         var sym = ev.target.getAttribute('data-symbol');
@@ -2086,4 +2240,12 @@
   if (btnDashboardColumnsSave) btnDashboardColumnsSave.addEventListener('click', saveDashboardColumnsFromModal);
   var btnDashboardColumnsCancel = document.getElementById('btn-dashboard-columns-cancel');
   if (btnDashboardColumnsCancel) btnDashboardColumnsCancel.addEventListener('click', function (ev) { ev.preventDefault(); closeDashboardColumnsModal(); });
+
+  var savedTab = null;
+  try { savedTab = sessionStorage.getItem('stockapp_tab'); } catch (e) {}
+  if (savedTab && TAB_IDS.indexOf(savedTab) !== -1 && document.querySelector('.tab[data-tab="' + savedTab + '"]')) {
+    switchToTab(savedTab);
+  } else {
+    loadDashboard();
+  }
 })();

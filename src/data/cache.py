@@ -175,6 +175,44 @@ def init_cache_db(cache_dir: str) -> None:
     conn.close()
 
 
+def get_ohlcv_days_count(cache_dir: str, symbol: str) -> int:
+    """Return the number of days (rows) stored in the OHLCV cache for the given symbol."""
+    import sqlite3
+    db = _db_path(cache_dir)
+    if not db.exists():
+        return 0
+    try:
+        conn = sqlite3.connect(str(db))
+        _ensure_table(conn)
+        cur = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE symbol = ?", (symbol,))
+        count = cur.fetchone()[0] if cur else 0
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+
+def get_ohlcv_date_range(cache_dir: str, symbol: str) -> tuple[Optional[date], Optional[date]]:
+    """Return (min_date, max_date) of cached OHLCV for the symbol, or (None, None) if no data."""
+    import sqlite3
+    db = _db_path(cache_dir)
+    if not db.exists():
+        return None, None
+    try:
+        conn = sqlite3.connect(str(db))
+        _ensure_table(conn)
+        cur = conn.execute(
+            "SELECT MIN(date), MAX(date) FROM ohlcv WHERE symbol = ?", (symbol,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row or row[0] is None or row[1] is None:
+            return None, None
+        return date.fromisoformat(row[0]), date.fromisoformat(row[1])
+    except Exception:
+        return None, None
+
+
 def list_symbols_in_cache(cache_dir: str) -> list[str]:
     """Return distinct symbols in the OHLCV cache, sorted. Updates as new data is written."""
     import sqlite3

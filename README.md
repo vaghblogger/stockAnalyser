@@ -1,17 +1,18 @@
-# Stock Analysis Agent (n8n + Python API)
+# Stock Analysis Agent (LangGraph + Python API)
 
-n8n-orchestrated agentic workflow for **Indian market (NSE/BSE)** daily chart analysis: free data (yfinance), technical indicators, sentiment, and buy/sell/hold signals with backtesting.
+LangGraph-orchestrated workflow for **Indian market (NSE/BSE)** daily chart analysis: free data (yfinance), technical indicators, sentiment, and buy/sell/hold signals with backtesting.
 
 ## Phase 1 (this repo)
 
 - **Free data**: Yahoo Finance (yfinance) for NSE/BSE symbols (e.g. `RELIANCE.NS`, `TCS.NS`).
 - **Cache**: OHLCV cached in **SQLite** (`data/cache/ohlcv.db`), one row per (symbol, date).
-- **Python API**: FastAPI with `/ohlcv`, `/enrich`, `/sentiment`, `/trend`, `/risk`, `/backtest`, `/metrics`.
+- **Python API**: FastAPI with `/ohlcv`, `/enrich`, `/sentiment`, `/trend`, `/risk`, `/backtest`, `/metrics`, and **POST /api/graph/analyze**, **POST /api/graph/backtest** (LangGraph workflows).
 - **Indicators**: SMA/EMA, RSI, MACD, ATR, Bollinger Bands, OBV (configurable via `config/config.yaml`).
 - **Sentiment**: RSS + keyword-based scoring (optional: add FinBERT via `transformers`).
 - **Backtest**: Rolling date windows, rule-based signal, forward returns, win rate / Sharpe / drawdown.
-- **n8n**: Workflows in `n8n/workflows/` (import into n8n); set env `API_BASE=http://localhost:8000`.
-- **CLI**: `run.py analyze --symbol RELIANCE --days 90` and `run.py backtest --symbol RELIANCE --start 2023-01-01 --end 2024-06-01`.
+- **Orchestration**: **LangGraph** in-process (analysis graph: OHLCV → enrich + sentiment → signal; backtest graph). No separate n8n server required.
+- **Dashboard**: Refresh runs **one symbol at a time** with a per-row spinner; only **missing date ranges** are fetched (DB is checked first). Yahoo data is requested in **1-year chunks** to avoid API limits (10 years = 10 chunks). Dashboard always loads live data from the DB. Each row shows **Duration (days)** (days of OHLCV in cache). **POST /api/data/refresh-symbol** refreshes a single symbol incrementally.
+- **CLI**: `run.py analyze --symbol RELIANCE --days 90`, `run.py backtest ...`, `run.py analyze-graph --symbol RELIANCE --days 90`, `run.py backtest-graph --symbol RELIANCE --start 2023-01-01 --end 2024-06-01`.
 
 ## Quick start
 
@@ -30,9 +31,11 @@ n8n-orchestrated agentic workflow for **Indian market (NSE/BSE)** daily chart an
    ```bash
    .venv/bin/python run.py analyze --symbol RELIANCE --days 90
    .venv/bin/python run.py backtest --symbol RELIANCE --start 2023-01-01 --end 2024-06-01
+   .venv/bin/python run.py analyze-graph --symbol RELIANCE --days 90
+   .venv/bin/python run.py backtest-graph --symbol RELIANCE --start 2023-01-01 --end 2024-06-01
    ```
 
-4. **n8n**: Run n8n locally, set `API_BASE=http://localhost:8000` (or `http://host.docker.internal:8000` if n8n is in Docker). Import `n8n/workflows/stock_analysis_workflow.json` and `stock_backtest_workflow.json`.
+4. **Graph API**: Use **POST /api/graph/analyze** and **POST /api/graph/backtest** (see `http://127.0.0.1:8000/docs`). Legacy n8n workflow JSONs remain in `n8n/workflows/` for reference (deprecated).
 
 ## Config
 
@@ -49,7 +52,8 @@ n8n-orchestrated agentic workflow for **Indian market (NSE/BSE)** daily chart an
 - `src/backtest/`: Runner and metrics.
 - `config/`: config.yaml, symbols.csv.
 - `data/cache/`: SQLite DB `ohlcv.db` for OHLCV cache.
-- `n8n/workflows/`: n8n workflow JSONs.
+- `src/graph/`: LangGraph state, analysis graph, backtest graph.
+- `n8n/workflows/`: Legacy n8n workflow JSONs (deprecated).
 
 ## Phase 2 (later)
 

@@ -3,33 +3,77 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <title>Stock Analysis – Workflow Data</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=__CACHE_BUST__">
   <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
   <div class="app">
     <header class="app-bar">
-      <div class="app-bar-brand">Stock Analysis</div>
+      <div class="app-bar-brand">Stock Analysis <span class="app-version" title="Dashboard is first tab">· v2</span></div>
       <div class="app-bar-actions">
         <button type="button" class="btn btn-secondary" id="btn-add-stock" title="Add a new stock to universe (fetches 10 years data)">Add stock</button>
       </div>
     </header>
 
     <nav class="tabs" role="tablist">
-      <button type="button" class="tab active" data-tab="analysis" role="tab" aria-selected="true">Analysis</button>
-      <button type="button" class="tab" data-tab="dashboard" role="tab" aria-selected="false">Dashboard</button>
+      <button type="button" class="tab active" data-tab="dashboard" role="tab" aria-selected="true">Dashboard</button>
+      <button type="button" class="tab" data-tab="analysis" role="tab" aria-selected="false">Analysis</button>
       <button type="button" class="tab" data-tab="backtest" role="tab" aria-selected="false">Backtest</button>
       <button type="button" class="tab" data-tab="paper" role="tab" aria-selected="false">Paper Trading</button>
       <button type="button" class="tab" data-tab="strategies" role="tab" aria-selected="false">Strategies</button>
     </nav>
 
     <main class="content">
+      <!-- Dashboard: all stocks in DB with indicators and signal (first tab) -->
+      <section id="panel-dashboard" class="tab-panel active" role="tabpanel">
+        <div class="panel-toolbar">
+          <div class="form-inline">
+            <div class="input-group">
+              <label for="dashboard-lookback-value">Lookback</label>
+              <div class="lookback-inputs">
+                <input type="number" id="dashboard-lookback-value" value="90" min="1">
+                <select id="dashboard-lookback-unit" aria-label="Lookback unit">
+                  <option value="days">Days</option>
+                  <option value="months">Months</option>
+                  <option value="years">Years</option>
+                </select>
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary" id="btn-dashboard-refresh">Refresh</button>
+            <button type="button" class="btn btn-secondary" id="btn-dashboard-columns" title="Column settings">Columns</button>
+          </div>
+        </div>
+        <div id="dashboard-loading" class="loading" hidden>Loading…</div>
+        <div id="dashboard-body" class="dashboard-body" hidden>
+          <p id="dashboard-summary" class="dashboard-summary"></p>
+          <div class="table-container dashboard-table-wrap">
+            <table class="data-table" id="table-dashboard">
+              <thead id="dashboard-thead">
+                <tr>
+                  <th>Stock</th>
+                  <th class="num">Close</th>
+                  <th class="num">SMA 20</th>
+                  <th class="num">SMA 50</th>
+                  <th class="num">RSI</th>
+                  <th class="num">MACD Hist</th>
+                  <th>Signal</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="dashboard-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- Analysis tab panel -->
-      <section id="panel-analysis" class="tab-panel active" role="tabpanel">
+      <section id="panel-analysis" class="tab-panel" role="tabpanel" hidden>
         <div class="panel-toolbar">
           <div class="form-inline">
             <div class="input-group analysis-symbol-wrap">
@@ -127,41 +171,6 @@
               </div>
             </div>
           </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Dashboard: all stocks in DB with indicators and signal -->
-      <section id="panel-dashboard" class="tab-panel" role="tabpanel" hidden>
-        <div class="panel-toolbar">
-          <div class="form-inline">
-            <div class="input-group">
-              <label for="dashboard-lookback">Lookback (days)</label>
-              <input type="number" id="dashboard-lookback" value="90" min="20" max="365">
-            </div>
-            <button type="button" class="btn btn-primary" id="btn-dashboard-refresh">Refresh</button>
-            <button type="button" class="btn btn-secondary" id="btn-dashboard-columns" title="Column settings">Columns</button>
-          </div>
-        </div>
-        <div id="dashboard-loading" class="loading" hidden>Loading…</div>
-        <div id="dashboard-body" class="dashboard-body" hidden>
-          <p id="dashboard-summary" class="dashboard-summary"></p>
-          <div class="table-container dashboard-table-wrap">
-            <table class="data-table" id="table-dashboard">
-              <thead id="dashboard-thead">
-                <tr>
-                  <th>Stock</th>
-                  <th class="num">Close</th>
-                  <th class="num">SMA 20</th>
-                  <th class="num">SMA 50</th>
-                  <th class="num">RSI</th>
-                  <th class="num">MACD Hist</th>
-                  <th>Signal</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody id="dashboard-tbody"></tbody>
-            </table>
           </div>
         </div>
       </section>
@@ -264,44 +273,52 @@
         </div>
         <div id="paper-body" class="paper-body">
           <div id="paper-list-wrap" class="paper-list-wrap">
-            <p id="paper-list-hint" class="paper-hint">Select a portfolio to manage holdings and run simulations, or add a new one.</p>
+            <p id="paper-list-hint" class="paper-hint">Select a portfolio to manage holdings and run simulations.</p>
             <div id="paper-portfolios-grid" class="paper-portfolios-grid"></div>
           </div>
           <div id="paper-detail-wrap" class="paper-detail-wrap" hidden>
-            <button type="button" class="paper-close-detail" id="paper-close-detail" aria-label="Back to list">← Back to list</button>
-            <div class="paper-detail-header">
-              <div class="paper-detail-info">
+            <div class="paper-detail-panel">
+              <header class="paper-detail-head">
                 <h3 id="paper-detail-title" class="paper-detail-title"></h3>
                 <p id="paper-detail-meta" class="paper-detail-meta"></p>
-              </div>
-              <div class="paper-detail-actions">
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-paper-edit-portfolio">Edit</button>
-                <button type="button" class="btn btn-secondary btn-sm btn-danger" id="btn-paper-delete-portfolio">Remove</button>
-              </div>
-            </div>
-            <div class="paper-holdings-section">
-              <h4 class="paper-section-title">Holdings</h4>
-              <div class="paper-add-stock-row">
-                <div class="input-group paper-add-symbol-group">
-                  <label for="paper-add-symbol" class="sr-only">Add stock</label>
-                  <div class="combobox-wrap">
-                    <input type="text" id="paper-add-symbol" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="paper-symbol-listbox" role="combobox">
-                    <button type="button" class="combobox-trigger" id="paper-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
-                    <ul id="paper-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+                <div class="paper-detail-head-actions">
+                  <button type="button" class="paper-close-detail" id="paper-close-detail" aria-label="Back to list">← Back</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-paper-edit-portfolio">Edit</button>
+                  <button type="button" class="btn btn-secondary btn-sm btn-danger" id="btn-paper-delete-portfolio">Remove</button>
+                </div>
+              </header>
+              <section class="paper-part paper-part-add">
+                <h4 class="paper-part-title">Add holding</h4>
+                <div class="paper-add-stock-row">
+                  <div class="input-group paper-add-symbol-group">
+                    <label for="paper-add-symbol" class="sr-only">Symbol</label>
+                    <div class="combobox-wrap">
+                      <input type="text" id="paper-add-symbol" placeholder="Search or select stock…" autocomplete="off" aria-label="Symbol" aria-expanded="false" aria-haspopup="listbox" aria-controls="paper-symbol-listbox" role="combobox">
+                      <button type="button" class="combobox-trigger" id="paper-symbol-trigger" aria-label="Open stock list" title="Open stock list">▼</button>
+                      <ul id="paper-symbol-listbox" class="combobox-list" role="listbox" aria-label="Stocks" hidden></ul>
+                    </div>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-paper-add-position">Add stock</button>
+                </div>
+              </section>
+              <section class="paper-part paper-part-holdings">
+                <h4 class="paper-part-title">Holdings</h4>
+                <div class="paper-holdings-tile">
+                  <div class="table-container paper-positions-container">
+                    <table class="data-table" id="paper-positions-table">
+                      <thead><tr><th>Symbol</th><th>Strategies</th><th class="col-actions"></th></tr></thead>
+                      <tbody id="paper-positions-tbody"></tbody>
+                    </table>
                   </div>
                 </div>
-                <button type="button" class="btn btn-secondary" id="btn-paper-add-position">Add stock</button>
-              </div>
-              <div class="table-container paper-positions-container">
-                <table class="data-table" id="paper-positions-table">
-                  <thead><tr><th>Symbol</th><th>Strategies</th><th class="col-actions"></th></tr></thead>
-                  <tbody id="paper-positions-tbody"></tbody>
-                </table>
-              </div>
-            </div>
-            <div class="paper-sim-section">
-              <button type="button" class="btn btn-primary" id="btn-paper-run">Run simulation</button>
-              <div id="paper-snapshots" class="paper-snapshots"></div>
+              </section>
+              <section class="paper-part paper-part-sim">
+                <h4 class="paper-part-title">Simulation</h4>
+                <div class="paper-sim-tile">
+                  <button type="button" class="btn btn-primary" id="btn-paper-run">Run simulation</button>
+                  <div id="paper-snapshots" class="paper-snapshots"></div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -423,6 +440,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=__CACHE_BUST__"></script>
 </body>
 </html>

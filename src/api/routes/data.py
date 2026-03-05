@@ -1,11 +1,17 @@
 """Data and universe: seed OHLCV, list/add/remove universe symbols."""
 
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from src.data.cache import get_cached_or_fetch, write_ohlcv_cache
+from src.data.cache import (
+    get_cached_or_fetch,
+    get_ohlcv_date_range,
+    get_ohlcv_days_count,
+    write_ohlcv_cache,
+)
 from src.data.universe import pre_seed_ohlcv
 from src.db.app_db import (
     add_universe_symbol,
@@ -21,6 +27,11 @@ router = APIRouter()
 
 class SeedRequest(BaseModel):
     lookback_days: Optional[int] = 730
+
+
+class RefreshSymbolRequest(BaseModel):
+    symbol: str  # base (RELIANCE) or yahoo (RELIANCE.NS)
+    lookback_days: Optional[int] = 3650
 
 
 class AddSymbolRequest(BaseModel):
@@ -40,6 +51,71 @@ class UpdateSymbolRequest(BaseModel):
 class UpdateSymbolBodyRequest(UpdateSymbolRequest):
     """Update symbol with current_symbol in body (avoids path-param 404 issues)."""
     current_symbol: str  # symbol being edited (path is always POST /universe/update)
+
+
+@router.post("/refresh-symbol")
+@router.post("/refresh_symbol")
+def post_refresh_symbol(request: Request, body: RefreshSymbolRequest):
+    """
+    Refresh OHLCV for a single symbol. Cross-checks cache and only fetches missing date ranges.
+    Body: { symbol: base or yahoo (e.g. RELIANCE or RELIANCE.NS), lookback_days }.
+    Returns ok, symbol, yahoo_symbol, success, data_duration_days, skipped?, error?
+    """
+    config = getattr(request.app.state, "config", None)
+    if config is None:
+        from src.config_loader import get_config
+        config = get_config()
+    provider = getattr(request.app.state, "data_provider", None)
+    if not provider:
+        return {
+            "ok": False,
+            "error": "Data provider not available",
+            "symbol": body.symbol,
+            "yahoo_symbol": None,
+            "success": False,
+            "data_duration_days": None,
+            "skipped": False,
+        }
+    cache_dir = config.cache_dir
+    sym = (body.symbol or "").strip()
+    if not sym:
+        return {
+            "ok": False,
+            "error": "Symbol is required",
+            "symbol": "",
+            "yahoo_symbol": None,
+            "success": False,
+            "data_duration_days": None,
+            "skipped": False,
+        }
+    entry = get_universe_symbol_by_any(cache_dir, sym)
+    if not entry:
+        return {
+            "ok": False,
+            "error": "Symbol not in universe",
+            "symbol": sym,
+            "yahoo_symbol": None,
+            "success": False,
+            "data_duration_days": None,
+            "skipped": False,
+        }
+    yahoo = (entry.get("yahoo_symbol") or entry.get("symbol") or "").strip()
+    if not yahoo:
+        return {
+            "ok": False,
+            "error": "No yahoo symbol",
+            "symbol": entry.get("symbol", sym),
+            "yahoo_symbol": None,
+            "success": False,
+            "data_duration_days": None,
+            "skipped": False,
+        }
+    lookback = body.lookback_days if body.lookback_days is not None else 3650
+    lookback = max(1, min(lookback, 3650 * 2))
+    result = _refresh_one_symbol_incremental(cache_dir, yahoo, lookback, provider)
+    result["symbol"] = entry.get("symbol", sym)
+    result["yahoo_symbol"] = yahoo
+    return result
 
 
 @router.post("/universe/update")
@@ -68,6 +144,7 @@ def post_seed(request: Request, body: Optional[SeedRequest] = None):
     """
     Pre-seed OHLCV cache for all symbols in universe.
     Fetches last lookback_days (default 730) and writes to cache.
+    Returns the list of symbols that were attempted (so UI can show what was refreshed).
     """
     config = getattr(request.app.state, "config", None)
     if config is None:
@@ -75,9 +152,11 @@ def post_seed(request: Request, body: Optional[SeedRequest] = None):
         config = get_config()
     provider = getattr(request.app.state, "data_provider", None)
     if not provider:
-        return {"ok": False, "error": "Data provider not available", "success": 0, "failed": 0}
+        return {"ok": False, "error": "Data provider not available", "success": 0, "failed": 0, "symbols": []}
     lookback = (body and body.lookback_days) or 730
     cache_dir = config.cache_dir
+    symbols = list_universe_symbols(cache_dir)
+    symbol_names = [s.get("symbol") or s.get("yahoo_symbol") or "" for s in symbols if s]
 
     def fetcher(symbol: str, start, end):
         return provider.get_daily_ohlcv(symbol, start, end)
@@ -87,8 +166,65 @@ def post_seed(request: Request, body: Optional[SeedRequest] = None):
         fetcher,
         lookback_days=lookback,
         write_cache=lambda _cd, sym, df: write_ohlcv_cache(_cd, sym, df),
+        symbols=symbols,
     )
-    return {"ok": True, "success": success, "failed": failed}
+    return {"ok": True, "success": success, "failed": failed, "symbols": symbol_names}
+
+
+def _refresh_one_symbol_incremental(
+    cache_dir: str,
+    yahoo_symbol: str,
+    lookback_days: int,
+    provider,
+) -> dict:
+    """
+    Refresh OHLCV for one symbol: only fetch date ranges not already in cache.
+    Uses provider.get_daily_ohlcv (which chunks internally) and merges into cache.
+    Returns dict with ok, success, data_duration_days, skipped, error.
+    """
+    end = date.today()
+    start_desired = end - timedelta(days=max(1, lookback_days))
+    cache_min, cache_max = get_ohlcv_date_range(cache_dir, yahoo_symbol)
+
+    missing_ranges = []
+    if cache_min is None or cache_max is None:
+        missing_ranges.append((start_desired, end))
+    else:
+        if start_desired < cache_min:
+            missing_ranges.append((start_desired, cache_min - timedelta(days=1)))
+        if end > cache_max:
+            missing_ranges.append((cache_max + timedelta(days=1), end))
+
+    if not missing_ranges:
+        return {
+            "ok": True,
+            "success": True,
+            "data_duration_days": get_ohlcv_days_count(cache_dir, yahoo_symbol),
+            "skipped": True,
+        }
+
+    for s, e in missing_ranges:
+        if s > e:
+            continue
+        try:
+            df = provider.get_daily_ohlcv(yahoo_symbol, s, e)
+            if df is not None and not getattr(df, "empty", True):
+                write_ohlcv_cache(cache_dir, yahoo_symbol, df)
+        except Exception as ex:
+            return {
+                "ok": False,
+                "success": False,
+                "data_duration_days": get_ohlcv_days_count(cache_dir, yahoo_symbol),
+                "skipped": False,
+                "error": str(ex),
+            }
+
+    return {
+        "ok": True,
+        "success": True,
+        "data_duration_days": get_ohlcv_days_count(cache_dir, yahoo_symbol),
+        "skipped": False,
+    }
 
 
 @router.get("/universe")

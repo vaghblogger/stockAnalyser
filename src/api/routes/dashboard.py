@@ -7,7 +7,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from src.analysis.indicators import compute_indicators
-from src.data.cache import get_cached_or_fetch, list_symbols_in_cache, read_ohlcv_cache_last_n, read_ohlcv_cache_partial
+from src.data.cache import (
+    get_cached_or_fetch,
+    get_ohlcv_days_count,
+    list_symbols_in_cache,
+    read_ohlcv_cache_last_n,
+    read_ohlcv_cache_partial,
+)
 from src.data.symbols import load_symbol_map
 from src.db.app_db import list_universe_symbols
 
@@ -46,8 +52,9 @@ def get_dashboard(
 ):
     """
     Return all symbols in the OHLCV cache with latest indicators and signal.
-    If cache does not have enough data for the lookback period, fetches from the data provider
-    and caches it. Each stock: symbol, company_name, indicators, signal (action, reason).
+    Always reads from the DB/cache (no response caching) so the dashboard stays in sync with
+    stored data. Each stock: symbol, company_name, indicators, signal, data_duration_days
+    (number of days of data in the cache for that symbol).
     """
     config = getattr(request.app.state, "config", None)
     if config is None:
@@ -93,14 +100,17 @@ def get_dashboard(
                 base = symbol.split(".")[0]
                 u = universe_by_symbol.get(symbol, {})
                 cn = u.get("company_name") or (symbol_map.get(base) or ("", ""))[1]
+                duration_days = get_ohlcv_days_count(cache_dir, symbol)
                 stocks.append({
                     "symbol": str(symbol),
                     "company_name": cn if cn else None,
                     "indicators": {},
                     "signal": {"action": "HOLD", "reason": "Insufficient data"},
+                    "data_duration_days": duration_days,
                 })
                 continue
             df = df.sort_index()
+            duration_days = max(len(df), get_ohlcv_days_count(cache_dir, symbol))
             df, last_ind = compute_indicators(df, ind_config)
             indicators = {}
             for k in ("close", "sma_20", "sma_50", "sma_200", "rsi", "macd", "macd_signal", "macd_hist", "atr", "bb_upper", "bb_lower", "obv"):
@@ -128,16 +138,19 @@ def get_dashboard(
                 "company_name": company_name,
                 "indicators": indicators_clean,
                 "signal": {"action": signal["action"], "reason": signal["reason"]},
+                "data_duration_days": duration_days,
             })
         except Exception:
             base = symbol.split(".")[0]
             u = universe_by_symbol.get(symbol, {})
             cn = u.get("company_name") or (symbol_map.get(base) or ("", ""))[1]
+            duration_days = get_ohlcv_days_count(cache_dir, symbol)
             stocks.append({
                 "symbol": str(symbol),
                 "company_name": cn if cn else None,
                 "indicators": {},
                 "signal": {"action": "HOLD", "reason": "Error computing indicators"},
+                "data_duration_days": duration_days,
             })
     payload = {"stocks": stocks, "count": len(stocks)}
     return JSONResponse(

@@ -399,6 +399,30 @@ def delete_strategy(cache_dir: str, strategy_id: str) -> bool:
 # --- Backtest runs (history) ---
 
 
+def _ensure_backtest_runs_table(conn) -> None:
+    """Create backtest_runs table if missing (e.g. old app.db)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            id TEXT PRIMARY KEY,
+            strategy_id TEXT,
+            strategy_name TEXT NOT NULL,
+            strategy_description TEXT,
+            symbols TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            params TEXT NOT NULL,
+            metrics TEXT NOT NULL,
+            rows TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at ON backtest_runs(created_at DESC)"
+    )
+    conn.commit()
+
+
 def save_backtest_run(
     cache_dir: str,
     *,
@@ -418,6 +442,7 @@ def save_backtest_run(
     rid = run_id or str(uuid4())
     conn = _conn(cache_dir)
     try:
+        _ensure_backtest_runs_table(conn)
         conn.execute(
             """INSERT INTO backtest_runs (
                 id, strategy_id, strategy_name, strategy_description,
@@ -465,6 +490,7 @@ def list_backtest_runs(
     """List backtest runs, newest first. Optional filter by symbol (in symbols list) or strategy_id."""
     conn = _conn(cache_dir)
     try:
+        _ensure_backtest_runs_table(conn)
         if symbol or strategy_id:
             conditions = []
             args: list[Any] = []

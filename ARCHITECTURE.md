@@ -1,6 +1,6 @@
 # Stock Analysis Agent — Architecture
 
-n8n-orchestrated agent for **Indian market (NSE/BSE)** daily chart analysis: free data (yfinance), technical indicators, sentiment, and buy/sell/hold signals with backtesting.
+LangGraph-orchestrated agent for **Indian market (NSE/BSE)** daily chart analysis: free data (yfinance), technical indicators, sentiment, and buy/sell/hold signals with backtesting. Orchestration runs in-process via **LangGraph** (replacing the previous n8n setup).
 
 ---
 
@@ -8,14 +8,19 @@ n8n-orchestrated agent for **Indian market (NSE/BSE)** daily chart analysis: fre
 
 ```mermaid
 flowchart TB
-    subgraph Clients["Clients & orchestration"]
+    subgraph Clients["Clients"]
         CLI["CLI (run.py)"]
         Web["Web app (/app)"]
-        n8n["n8n workflows"]
     end
 
     subgraph API["Python API (FastAPI)"]
         Routes["/ohlcv, /enrich, /sentiment, /trend, /risk\n/backtest, /dashboard, /health\n/api/dashboard/views, /api/strategies\n/api/paper, /api/data/seed, /api/data/universe"]
+        GraphRoutes["POST /api/graph/analyze\nPOST /api/graph/backtest"]
+    end
+
+    subgraph LangGraph["LangGraph in-process"]
+        AnalysisGraph["Analysis graph"]
+        BacktestGraph["Backtest graph"]
     end
 
     subgraph Core["Core services"]
@@ -32,8 +37,13 @@ flowchart TB
 
     CLI --> Routes
     Web --> Routes
-    n8n -->|"HTTP GET/POST"| Routes
-
+    CLI --> GraphRoutes
+    GraphRoutes --> AnalysisGraph
+    GraphRoutes --> BacktestGraph
+    AnalysisGraph --> Data
+    AnalysisGraph --> Analysis
+    AnalysisGraph --> Sentiment
+    BacktestGraph --> Backtest
     Routes --> Data
     Routes --> Analysis
     Routes --> Sentiment
@@ -46,70 +56,51 @@ flowchart TB
     Backtest --> Analysis
 ```
 
-- **CLI** and **Web app** call the API directly.
-- **n8n** orchestrates multi-step workflows by calling the same API (e.g. OHLCV → Enrich + Sentiment → Merge → Signal).
+- **CLI** and **Web app** call the API directly (legacy routes and/or graph endpoints).
+- **Orchestration** is done by **LangGraph** in-process: **POST /api/graph/analyze** and **POST /api/graph/backtest**.
 - **API** uses config-driven **data**, **analysis**, **sentiment**, and **backtest** services; data is cached in SQLite.
-- **Data refresh** is handled by the app’s **scheduler** (APScheduler), not n8n: at a configurable interval, OHLCV for all universe symbols is refreshed and written to the cache.
+- **Data refresh** is handled by the app’s **scheduler** (APScheduler), at a configurable interval, OHLCV for all universe symbols is refreshed and written to the cache.
 - **App DB** (`data/app.db`) stores dashboard views, strategies, symbol universe, paper portfolios/snapshots, and backtest run history.
 
 ---
 
-## n8n in the architecture
+## LangGraph in the architecture
 
-n8n runs as a separate process and uses the Stock Analysis API as an HTTP backend. Set `API_BASE` (or use `http://127.0.0.1:8000` / `http://host.docker.internal:8000` if n8n is in Docker).
+LangGraph runs inside the FastAPI process. No separate orchestration server is required.
 
-### n8n ↔ API flow
+### Graph endpoints
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant n8n
-    participant API as Python API
+- **POST /api/graph/analyze** — Body: `{ "symbol": "RELIANCE", "days": 90 }`. Runs the analysis graph (OHLCV → enrich + sentiment in parallel → merge and signal). Returns `symbol`, `signal`, `reason`, `enrich_result`, `sentiment_result`, etc.
+- **POST /api/graph/backtest** — Body: same as **POST /api/backtest**. Returns same shape (metrics, rows, strategy, by_symbol, run_id).
 
-    User->>n8n: Trigger workflow (e.g. Manual)
-    n8n->>API: GET /ohlcv?symbol=RELIANCE&days=90
-    API->>n8n: { ohlcv, symbol, ... }
-    par Enrich and Sentiment
-        n8n->>API: POST /enrich { ohlcv, symbol }
-        API->>n8n: { indicators, volume_summary, structure_summary }
-        n8n->>API: GET /sentiment?symbol=...&lookback_days=7
-        API->>n8n: { label, score, snippets }
-    end
-    n8n->>n8n: Merge → Set Output (signal, reason)
-    n8n->>User: Result (e.g. signal=HOLD, reason=...)
-```
-
-### Stock Analysis workflow (n8n)
+### Analysis graph (LangGraph)
 
 ```mermaid
 flowchart LR
-    T["Manual Trigger"] --> OHLCV["Fetch OHLCV\nGET /ohlcv"]
-    OHLCV --> Enrich["Enrich Indicators\nPOST /enrich"]
-    OHLCV --> Sentiment["Fetch Sentiment\nGET /sentiment"]
-    Enrich --> Merge["Merge"]
-    Sentiment --> Merge
-    Merge --> Out["Set Output\n(signal, reason)"]
+    Start[START] --> FetchOHLCV["fetch_ohlcv"]
+    FetchOHLCV --> Enrich["enrich"]
+    FetchOHLCV --> FetchSentiment["fetch_sentiment"]
+    Enrich --> Merge["merge_and_signal"]
+    FetchSentiment --> Merge
+    Merge --> End[END]
 ```
 
-### Stock Backtest workflow (n8n)
+### Backtest graph (LangGraph)
 
 ```mermaid
 flowchart LR
-    T["Manual Trigger"] --> BT["POST Backtest\nPOST /backtest"]
-    BT --> Report["Report\n(metrics, rows_count, strategy, by_symbol)"]
+    Start[START] --> RunBT["run_backtest"]
+    RunBT --> End[END]
 ```
 
-- **Backtest request** may include optional `strategy_id` (saved strategy) or `symbols` + `strategy_assignments` for multi-symbol runs. If omitted, the global default strategy is used.
-- **Response** includes `metrics`, `rows`, `strategy` (name, description), and optionally `by_symbol` (per-symbol metrics).
+Graph code: `src/graph/` (state, analysis_graph, backtest_graph); routes: `src/api/routes/graph.py`. Legacy n8n workflow JSONs remain in `n8n/workflows/` for reference (deprecated).
 
-Workflow JSONs: `n8n/workflows/stock_analysis_workflow.json`, `n8n/workflows/stock_backtest_workflow.json`.
+### API endpoints (overview)
 
-### New API endpoints (re-architecture)
-
-- **Dashboard views**: `GET/POST /api/dashboard/views`, `GET/PUT/DELETE /api/dashboard/views/:id` — persist/restore column config.
+- **Dashboard**: `GET /dashboard` — always reads from DB/cache (no response caching); returns per-symbol indicators, signal, and **data_duration_days** (number of days of OHLCV stored for that symbol). Dashboard views: `GET/POST /api/dashboard/views`, `GET/PUT/DELETE /api/dashboard/views/:id` — persist/restore column config.
 - **Strategies**: `GET/POST /api/strategies`, `GET/PUT/DELETE /api/strategies/:id`, `POST /api/strategies/:id/set-default` — CRUD and global default.
 - **Paper trading**: `GET/POST /api/paper/portfolios`, `GET/PUT/DELETE /api/paper/portfolios/:id`, positions and `POST .../run`, `GET .../snapshots`.
-- **Data**: `POST /api/data/seed` — pre-seed OHLCV for universe; `GET/POST/DELETE /api/data/universe` — list/add/remove symbols.
+- **Data**: `POST /api/data/seed` — batch pre-seed OHLCV; **POST /api/data/refresh-symbol** — refresh one symbol (cross-checks cache, fetches only missing date ranges; used by dashboard for one-by-one refresh with per-row spinner). Yahoo provider chunks requests at 365 days to avoid 1-year API limits. `GET/POST/DELETE /api/data/universe` — list/add/remove symbols.
 
 ---
 
@@ -129,6 +120,7 @@ flowchart TB
         Trend_R["routes/trend"]
         Risk_R["routes/risk"]
         Backtest_R["routes/backtest"]
+        Graph_R["routes/graph"]
         Dashboard_R["routes/dashboard"]
     end
 
@@ -186,7 +178,7 @@ flowchart TB
 
 ## Data flow (analyse path)
 
-End-to-end path used by both the API (and thus n8n) and the CLI `analyze` command:
+End-to-end path used by both the API and the CLI `analyze` command:
 
 ```mermaid
 flowchart LR
@@ -236,7 +228,7 @@ flowchart LR
 
 ## Backtest flow
 
-Used by `POST /backtest` and the n8n backtest workflow:
+Used by `POST /backtest` and the graph backtest workflow:
 
 ```mermaid
 flowchart TB
@@ -322,16 +314,16 @@ flowchart LR
 
 | Path | Purpose |
 |------|--------|
-| `run.py` | CLI: `analyze`, `backtest` (calls API) |
+| `run.py` | CLI: `analyze`, `backtest`, `analyze-graph`, `backtest-graph` (calls API) |
 | `config/config.yaml` | Providers, indicators, backtest defaults, API port |
 | `config/symbols.csv` | symbol → yahoo_symbol, company_name |
 | `data/cache/ohlcv.db` | SQLite OHLCV cache |
 | `data/app.db` | App DB: dashboard views, strategies, universe, paper portfolios, backtest runs |
 | `config/nifty50.csv` | Nifty 50 symbol list (default universe) |
 | `static/` | Web app (index.html, app.js, styles.css) |
-| `n8n/workflows/` | n8n workflow JSONs (analysis, backtest) |
+| `n8n/workflows/` | Legacy n8n workflow JSONs (deprecated; use graph endpoints) |
 | `src/api/main.py` | FastAPI app, lifespan, CORS, static mount, scheduler start/stop |
-| `src/api/routes/*` | Route handlers (ohlcv, enrich, backtest, dashboard, dashboard_views, strategies, paper, data) |
+| `src/api/routes/*` | Route handlers (ohlcv, enrich, backtest, graph, dashboard, dashboard_views, strategies, paper, data) |
 | `src/data/` | Cache + data provider (yfinance) + universe (universe.py) |
 | `src/db/` | App DB schema and CRUD (app_db.py) |
 | `src/scheduler.py` | APScheduler for periodic OHLCV refresh |
@@ -352,14 +344,14 @@ Config is loaded from `config/config.yaml` and validated with Pydantic (`src/sta
 - `SENTIMENT_PROVIDER` — e.g. `free_news_finbert`
 - `CACHE_DIR` — cache directory path
 - `API_PORT` — API server port
-- `API_BASE` — used by CLI and n8n to call the API (e.g. `http://localhost:8000`)
+- `API_BASE` — used by CLI to call the API (e.g. `http://localhost:8000`)
 
 ---
 
 ## Summary
 
-- **Single backend**: One FastAPI app serves REST endpoints, static web app, and is used by both CLI and n8n.
+- **Single backend**: One FastAPI app serves REST endpoints, static web app, and graph endpoints; used by CLI and web.
 - **Data refresh**: Scheduler (APScheduler) runs at a configurable interval to refresh OHLCV for all universe symbols; universe is stored in app DB and seeded from config/nifty50.csv when empty.
-- **n8n**: Orchestrates analysis (OHLCV → Enrich + Sentiment → Merge → Output) and backtest (POST /backtest, optional strategy_id; response includes strategy, by_symbol) via HTTP; no direct DB access.
-- **Layers**: API → Data (providers + SQLite cache + universe), App DB (views, strategies, paper), Analysis, Sentiment, Backtest, Paper engine; Scheduler refreshes cache from universe.
+- **LangGraph**: Orchestrates analysis (OHLCV → enrich + sentiment in parallel → merge and signal) and backtest via **POST /api/graph/analyze** and **POST /api/graph/backtest** in-process; no separate orchestration server.
+- **Layers**: API → Data (providers + SQLite cache + universe), App DB (views, strategies, paper), Analysis, Sentiment, Backtest, Paper engine; Scheduler refreshes cache from universe; `src/graph/` for LangGraph workflows.
 - **Config**: YAML + env; all behaviour (providers, indicator params, backtest defaults) is config-driven.
